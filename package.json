@@ -1,6 +1,6 @@
 {
     "name": "@altshiftab/utils",
-    "version": "0.0.4",
+    "version": "0.0.5",
     "type": "module",
     "repository": {
         "type": "git",
@@ -28,6 +28,6 @@
         "build": "tsc"
     },
     "devDependencies": {
-        "typescript": "^5.9.3"
+        "typescript": "^6.0.3"
     }
 }

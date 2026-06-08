@@ -39,7 +39,7 @@ export function problemDetailFromResponseText(responseText: string) {
     let problemDetail: ProblemDetail | null = null;
     try {
         const candidate = JSON.parse(responseText);
-        if (candidate.title && candidate.status && candidate.instance) {
+        if (candidate.title && candidate.status) {
             problemDetail = candidate;
         }
     } catch {}
