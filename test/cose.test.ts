@@ -55,6 +55,24 @@ test("cbor round trip", () => {
     assert.deepEqual(decode(encode(value)), value);
 });
 
+test("cbor plain object encoding", () => {
+    // Objects encode identically to text-keyed maps.
+    assert.deepEqual(
+        encode({b: 1, a: "x", c: new Uint8Array([1, 2])}),
+        encode(new Map<string, unknown>([["b", 1], ["a", "x"], ["c", new Uint8Array([1, 2])]])),
+    );
+
+    // Undefined-valued properties are omitted, like optional interface properties.
+    assert.deepEqual(encode({a: 1, b: undefined}), encode({a: 1}));
+
+    // Nested objects work; class instances do not.
+    assert.deepEqual(
+        encode({outer: {inner: [1]}}),
+        encode(new Map([["outer", new Map([["inner", [1]]])]])),
+    );
+    assert.throws(() => encode(new Date(0)));
+});
+
 test("cbor deterministic map key order", () => {
     const encoded = encode(new Map<number, unknown>([[-1, 0], [4, 0], [1, 0]]));
     // Bytewise key order: 1 (0x01), 4 (0x04), -1 (0x20).
@@ -121,6 +139,17 @@ test("decrypt go fixture", async () => {
     assert.equal(textDecoder.decode(result.plaintext), "Interop test content.");
     assert.equal(textDecoder.decode(result.keyIdentifier ?? new Uint8Array(0)), "interop-key-id");
     assert.equal(result.contentType, "application/cbor");
+});
+
+test("empty key identifier treated as absent", async () => {
+    const keyPair = await crypto.subtle.generateKey({name: "ECDH", namedCurve: "P-256"}, false, ["deriveBits"]);
+
+    const message = await encrypt(textEncoder.encode("This is the content."), keyPair.publicKey, {
+        keyIdentifier: new Uint8Array(0),
+    });
+
+    const result = await decrypt(message, keyPair.privateKey);
+    assert.equal(result.keyIdentifier, null);
 });
 
 test("external aad mismatch fails", async () => {

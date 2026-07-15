@@ -23,7 +23,7 @@ function compareBytes(a: Uint8Array, b: Uint8Array): number {
     return a.length - b.length;
 }
 
-function concatChunks(chunks: Uint8Array[]): Uint8Array {
+function concatChunks(chunks: Uint8Array[]): Uint8Array<ArrayBuffer> {
     const result = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.length, 0));
     let offset = 0;
     for (const chunk of chunks) {
@@ -59,6 +59,24 @@ function encodeTypeAndArgument(majorType: number, argument: number): Uint8Array 
     return bytes;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+    if (typeof value !== "object" || value === null)
+        return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+}
+
+function encodeMapEntries(entries: [unknown, unknown][], chunks: Uint8Array[]): void {
+    const encodedEntries: [Uint8Array, Uint8Array][] = [];
+    for (const [key, item] of entries)
+        encodedEntries.push([encode(key), encode(item)]);
+    encodedEntries.sort((a, b) => compareBytes(a[0], b[0]));
+
+    chunks.push(encodeTypeAndArgument(5, encodedEntries.length));
+    for (const [keyBytes, itemBytes] of encodedEntries)
+        chunks.push(keyBytes, itemBytes);
+}
+
 function encodeItem(value: unknown, chunks: Uint8Array[]): void {
     if (value === null) {
         chunks.push(new Uint8Array([0xf6]));
@@ -83,23 +101,25 @@ function encodeItem(value: unknown, chunks: Uint8Array[]): void {
         for (const item of value)
             encodeItem(item, chunks);
     } else if (value instanceof Map) {
-        const entries: [Uint8Array, Uint8Array][] = [];
-        for (const [key, item] of value.entries())
-            entries.push([encode(key), encode(item)]);
-        entries.sort((a, b) => compareBytes(a[0], b[0]));
-
-        chunks.push(encodeTypeAndArgument(5, entries.length));
-        for (const [keyBytes, itemBytes] of entries)
-            chunks.push(keyBytes, itemBytes);
+        encodeMapEntries([...value.entries()], chunks);
     } else if (value instanceof CborTag) {
         chunks.push(encodeTypeAndArgument(6, value.tag));
         encodeItem(value.value, chunks);
+    } else if (isPlainObject(value)) {
+        // Plain objects encode as text-keyed maps; properties with an undefined value are
+        // omitted, mirroring JSON.stringify and optional interface properties.
+        const entries: [unknown, unknown][] = [];
+        for (const [key, item] of Object.entries(value)) {
+            if (item !== undefined)
+                entries.push([key, item]);
+        }
+        encodeMapEntries(entries, chunks);
     } else {
         throw new CborError(`Unsupported value type: ${typeof value}`);
     }
 }
 
-export function encode(value: unknown): Uint8Array {
+export function encode(value: unknown): Uint8Array<ArrayBuffer> {
     const chunks: Uint8Array[] = [];
     encodeItem(value, chunks);
     return concatChunks(chunks);

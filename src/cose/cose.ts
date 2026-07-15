@@ -144,7 +144,10 @@ async function deriveContentEncryptionKey(
 export interface EncryptOptions {
     /** Defaults to A256GCM. */
     contentEncryptionAlgorithm?: number;
-    /** Identifies the recipient public key; placed in the recipient unprotected header. */
+    /**
+     * Identifies the recipient public key; placed in the recipient unprotected header. Empty is
+     * treated as absent.
+     */
     keyIdentifier?: Uint8Array;
     /** Describes the plaintext; placed in the content protected header. */
     contentType?: string | number;
@@ -160,7 +163,7 @@ export async function encrypt(
     plaintext: Uint8Array,
     recipientPublicKey: CryptoKey,
     options: EncryptOptions = {},
-): Promise<Uint8Array> {
+): Promise<Uint8Array<ArrayBuffer>> {
     const contentAlgorithm = options.contentEncryptionAlgorithm ?? AlgorithmA256GCM;
     const contentEncryption = contentEncryptionRegistry.get(contentAlgorithm);
     if (!contentEncryption)
@@ -205,7 +208,7 @@ export async function encrypt(
     ]);
 
     const recipientUnprotected = new Map<number, unknown>([[headerLabelEphemeralKey, ephemeralKeyMap]]);
-    if (options.keyIdentifier !== undefined)
+    if (options.keyIdentifier?.length)
         recipientUnprotected.set(headerLabelKeyIdentifier, options.keyIdentifier);
 
     return encode(
