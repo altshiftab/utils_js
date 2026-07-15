@@ -1,6 +1,6 @@
 {
     "name": "@altshiftab/utils",
-    "version": "0.0.5",
+    "version": "0.0.6",
     "type": "module",
     "repository": {
         "type": "git",
@@ -21,13 +21,23 @@
         "./http/utils": {
             "import": "./dist/http/utils.js",
             "types": "./dist/http/utils.d.ts"
+        },
+        "./cbor": {
+            "import": "./dist/cbor/cbor.js",
+            "types": "./dist/cbor/cbor.d.ts"
+        },
+        "./cose": {
+            "import": "./dist/cose/cose.js",
+            "types": "./dist/cose/cose.d.ts"
         }
     },
     "scripts": {
         "prepare": "npm run build",
-        "build": "tsc"
+        "build": "tsc",
+        "test": "tsc -p tsconfig.test.json && node --test \"build/test/**/*.test.js\""
     },
     "devDependencies": {
-        "typescript": "^6.0.3"
+        "@types/node": "^26.1.1",
+        "typescript": "^7.0.2"
     }
 }
