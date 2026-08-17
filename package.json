@@ -1,10 +1,10 @@
 {
     "name": "@altshiftab/utils",
-    "version": "0.0.7",
+    "version": "0.0.8",
     "type": "module",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/vphpersson/X.git"
+        "url": "git+https://github.com/altshiftab/utilsjs.git"
     },
     "publishConfig": {
         "registry": "https://npm.pkg.github.com/"
@@ -29,6 +29,22 @@
         "./cose": {
             "import": "./dist/cose/cose.js",
             "types": "./dist/cose/cose.d.ts"
+        },
+        "./browser/error_reporting": {
+            "import": "./dist/browser/error_reporting.js",
+            "types": "./dist/browser/error_reporting.d.ts"
+        },
+        "./browser/session": {
+            "import": "./dist/browser/session.js",
+            "types": "./dist/browser/session.d.ts"
+        },
+        "./browser/view_transition": {
+            "import": "./dist/browser/view_transition.js",
+            "types": "./dist/browser/view_transition.d.ts"
+        },
+        "./browser/routing": {
+            "import": "./dist/browser/routing.js",
+            "types": "./dist/browser/routing.d.ts"
         }
     },
     "scripts": {
