@@ -32,7 +32,7 @@ export async function fetchWithRequest(request: Request, options: RequestInitEx=
 
 export async function fetchEx(url: string | URL, options: RequestInit & RequestInitEx = {}) {
     options.method ||= "GET";
-    return fetchWithRequest(new Request(typeof url === "string" ? url : url.toString(), options));
+    return fetchWithRequest(new Request(typeof url === "string" ? url : url.toString(), options), options);
 }
 
 export function problemDetailFromResponseText(responseText: string) {
