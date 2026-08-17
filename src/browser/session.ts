@@ -33,12 +33,23 @@ export async function refreshSession(
         lastRefresh = Date.now();
     }
 
+    // Polling is fire-and-forget: a transient failure is retried on the next tick, and an
+    // unhandled rejection here would reach addErrorEventListeners as an application error.
+    function pollRefresh() {
+        doRefresh().catch(error => {
+            console.error("An error occurred when refreshing the session: ", error);
+        });
+    }
+
     document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible" && Date.now() - lastRefresh >= intervalMs) {
-            doRefresh();
+            pollRefresh();
         }
     });
 
+    // Scheduled before the first refresh is awaited: a failure at startup, an offline page load
+    // above all, must not leave the page without polling for the rest of its life.
+    setInterval(pollRefresh, intervalMs);
+
     await doRefresh();
-    setInterval(doRefresh, intervalMs);
 }
