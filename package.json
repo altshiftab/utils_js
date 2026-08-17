@@ -4,7 +4,7 @@
     "type": "module",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/altshiftab/utilsjs.git"
+        "url": "git+https://github.com/altshiftab/utils_js.git"
     },
     "publishConfig": {
         "registry": "https://npm.pkg.github.com/"
