@@ -117,6 +117,24 @@ test("a date is read from the address, in the shapes publishers write it", () =>
     }
 });
 
+test("a timestamp naming no zone is read as UTC, not as the reader's local time", () => {
+    // Al Jazeera writes 2026-08-04T01:43:51. Read as local time in a zone ahead of
+    // UTC that becomes the third of August, which is the wrong day.
+    const document = documentOf({meta: [{name: "publishedDate", content: "2026-08-04T01:43:51"}]});
+    assert.equal(extractPublishedDate(document), "2026-08-04T01:43:51.000Z");
+
+    // A stated zone or offset is honoured as given.
+    const offset = documentOf({meta: [{name: "publishedDate", content: "2026-08-04T01:43:51+02:00"}]});
+    assert.equal(extractPublishedDate(offset), "2026-08-03T23:43:51.000Z");
+
+    // A bare date is midnight UTC, so that the day it names is the day it keeps.
+    const bare = documentOf({meta: [{name: "publishedDate", content: "2026-08-04"}]});
+    assert.equal(extractPublishedDate(bare), "2026-08-04T00:00:00.000Z");
+
+    // And an address, which names a day and no time at all.
+    assert.equal(extractPublishedDateFromUrl("https://www.aljazeera.com/news/2026/8/4/x"), "2026-08-04T00:00:00.000Z");
+});
+
 test("the address is consulted only after the document, and only when given", () => {
     const dated = documentOf({meta: [{property: "article:published_time", content: "2026-08-14T16:01:43Z"}]});
     const bare = documentOf({});

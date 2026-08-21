@@ -62,10 +62,20 @@ const urlDatePatterns: readonly RegExp[] = [
     /-(\d{4})-(\d{2})-(\d{2})\/?$/,
 ];
 
+/** An ISO date or date-time stating no zone and no offset, which Date reads as local time. */
+const zonelessPattern = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?)?$/;
+
 function toIsoString(value: string | null | undefined): string {
     if (!value)
         return "";
-    const date = new Date(value.trim());
+
+    const trimmed = value.trim();
+    // Read as UTC when the page names no zone. Date would otherwise read it as
+    // the reader's local time, which moves the moment by the reader's offset and,
+    // for anything published near midnight, reports the wrong day. Al Jazeera
+    // writes its publishedDate this way.
+    const date = new Date(zonelessPattern.test(trimmed) ? `${trimmed.replace(" ", "T")}Z` : trimmed);
+
     return isNaN(date.getTime()) ? "" : date.toISOString();
 }
 
