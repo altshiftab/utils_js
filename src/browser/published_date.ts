@@ -26,22 +26,29 @@ export interface PublishedDateDocument {
  * them, so both are matched: Open Graph writes `property`, Schema.org's microdata `itemprop`, and
  * the rest `name`. A modified time is last, being better than nothing but not a publication date.
  */
-const metaKeys: readonly (readonly [attribute: string, value: string])[] = [
-    ["property", "article:published_time"],
-    ["property", "og:article:published_time"],
-    ["itemprop", "datePublished"],
-    ["name", "datePublished"],
-    ["name", "date"],
-    ["name", "DC.date"],
-    ["name", "DC.date.issued"],
-    ["name", "pubdate"],
-    ["name", "publish_date"],
-    ["name", "sailthru.date"],
+const metaNames: readonly string[] = [
+    "article:published_time",
+    "og:article:published_time",
+    "datePublished",
+    "date",
+    "DC.date",
+    "DC.date.issued",
+    "pubdate",
+    "publish_date",
+    "publishdate",
+    "sailthru.date",
     // Al Jazeera's spelling, the reverse of Schema.org's.
-    ["name", "publishedDate"],
-    ["property", "article:modified_time"],
-    ["name", "lastDate"],
+    "publishedDate",
+    "article:modified_time",
+    "lastDate",
 ];
+
+// Each name is looked for under all three, rather than the one its vocabulary
+// prescribes. Open Graph says property and Schema.org's microdata says itemprop,
+// but publishers are not consistent about it -- Svenska Dagbladet writes
+// article:published_time under name -- and a date stated under the wrong
+// attribute is still the date the page is stating.
+const metaAttributes: readonly string[] = ["property", "itemprop", "name"];
 
 /** Attributes that mark a `<time>` as the publication one, most specific first. */
 const timePreferences: readonly ((element: PublishedDateElement) => boolean)[] = [
@@ -93,25 +100,61 @@ function fromMeta(document: PublishedDateDocument): string {
         }
     }
 
-    for (const [attribute, value] of metaKeys) {
-        const iso = toIsoString(contents.get(`${attribute}:${value.toLowerCase()}`));
-        if (iso)
-            return iso;
+    for (const name of metaNames) {
+        for (const attribute of metaAttributes) {
+            const iso = toIsoString(contents.get(`${attribute}:${name.toLowerCase()}`));
+            if (iso)
+                return iso;
+        }
     }
     return "";
 }
 
-const jsonLdDatePattern = /"date(?:Published|Created)"\s*:\s*"([^"]+)"/;
+/**
+ * Read only from the objects the block is about, never from what they contain. A live blog states
+ * its updates as a nested array, each with a date of its own; the newest of those is a few minutes
+ * old whatever the age of the page, and taking it reports a years-old feed as published today.
+ */
+function datePublishedOf(value: unknown): string {
+    if (!value || typeof value !== "object")
+        return "";
+
+    for (const item of Array.isArray(value) ? value : [value]) {
+        if (!item || typeof item !== "object")
+            continue;
+        const record = item as Record<string, unknown>;
+
+        // A @graph names several things the page is about; its members are peers, not parts.
+        for (const entry of [record, ...(Array.isArray(record["@graph"]) ? record["@graph"] : [])]) {
+            if (!entry || typeof entry !== "object")
+                continue;
+            const fields = entry as Record<string, unknown>;
+            for (const key of ["datePublished", "dateCreated"]) {
+                const field = fields[key];
+                const iso = typeof field === "string" ? toIsoString(field) : "";
+                if (iso)
+                    return iso;
+            }
+        }
+    }
+    return "";
+}
 
 function fromJsonLd(document: PublishedDateDocument): string {
     for (const element of document.getElementsByTagName("script")) {
         const type = element.getAttribute("type");
         if (!type || type.toLowerCase().trim() !== "application/ld+json")
             continue;
-        // Matched rather than parsed: the block may be large, may be invalid, and only one value
-        // out of it is wanted.
-        const match = jsonLdDatePattern.exec(element.textContent ?? "");
-        const iso = toIsoString(match?.[1]);
+
+        let data: unknown;
+        try {
+            data = JSON.parse(element.textContent ?? "");
+        } catch {
+            // Invalid JSON, of which there is a great deal in the wild.
+            continue;
+        }
+
+        const iso = datePublishedOf(data);
         if (iso)
             return iso;
     }

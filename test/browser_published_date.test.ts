@@ -74,6 +74,46 @@ test("a date is read from a JSON-LD block when the meta names carry none", () =>
     assert.equal(day(extractPublishedDate(document)), "2026-02-16");
 });
 
+test("a meta name is honoured whatever attribute it is written under", () => {
+    // Svenska Dagbladet writes the Open Graph name under name rather than property.
+    const asName = documentOf({meta: [{name: "article:published_time", content: "2023-03-16T08:51:35+01:00"}]});
+    assert.equal(day(extractPublishedDate(asName)), "2023-03-16");
+
+    const asProperty = documentOf({meta: [{property: "article:published_time", content: "2023-03-16T08:51:35+01:00"}]});
+    assert.equal(day(extractPublishedDate(asProperty)), "2023-03-16");
+});
+
+test("a live blog's updates are not mistaken for the page's own date", () => {
+    // What Svenska Dagbladet's rolling feed states: the page began in 2023, and the
+    // array holds an entry from minutes ago. Reading the array reports a years-old
+    // feed as published today.
+    const liveBlog = JSON.stringify({
+        "@type": "LiveBlogPosting",
+        headline: "Senaste nytt",
+        liveBlogUpdate: [
+            {"@type": "BlogPosting", headline: "Polisinsats pågår vid skola", datePublished: "2026-08-21T12:53:12.678Z"},
+            {"@type": "BlogPosting", headline: "Tre nya fall av mässling", datePublished: "2026-08-21T12:05:34.809Z"},
+        ],
+    });
+
+    // Nothing of the page's own, so nothing is taken from the updates either.
+    assert.equal(extractPublishedDate(documentOf({script: [{type: "application/ld+json", textContent: liveBlog}]})), "");
+
+    // The page's own date is read, and the updates do not displace it.
+    const withOwn = JSON.stringify({...JSON.parse(liveBlog), datePublished: "2023-03-16T08:51:35Z"});
+    assert.equal(
+        day(extractPublishedDate(documentOf({script: [{type: "application/ld+json", textContent: withOwn}]}))),
+        "2023-03-16",
+    );
+
+    // A @graph names peers rather than parts, so its members are still read.
+    const graph = JSON.stringify({"@graph": [{"@type": "WebSite"}, {"@type": "Article", datePublished: "2026-05-04T10:00:00Z"}]});
+    assert.equal(
+        day(extractPublishedDate(documentOf({script: [{type: "application/ld+json", textContent: graph}]}))),
+        "2026-05-04",
+    );
+});
+
 test("a time element is read, preferring the one marked as the published date", () => {
     const document = documentOf({
         time: [
