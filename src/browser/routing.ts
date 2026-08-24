@@ -1,5 +1,41 @@
 import {updateWithViewTransition} from "./view_transition.js";
 
+/**
+ * Turns the navigations a SPA answers for into calls of `navigate`, leaving every other navigation
+ * to the browser. `handlesUrl` says which destinations are the SPA's; the URL handed to `navigate`
+ * is the destination, query string and all.
+ */
+export function interceptSpaNavigation(
+    handlesUrl: (url: URL) => boolean,
+    navigate: (url: URL) => void | Promise<void>,
+) {
+    // Browsers without the Navigation API (Firefox ESR, older Safari) get full-page navigations instead.
+    (window as {navigation?: Navigation}).navigation?.addEventListener("navigate", event => {
+        // Left to the browser: navigations that cannot be intercepted (cross-origin or
+        // cross-document-only), downloads, fragment scrolling, and form submissions.
+        if (!event.canIntercept || event.hashChange || event.downloadRequest !== null || event.formData !== null)
+            return;
+
+        // Only handle pushes and history traversals: `replace` is URL state syncing
+        // (e.g. filter params) and `reload` should fetch a fresh document.
+        if (event.navigationType !== "push" && event.navigationType !== "traverse")
+            return;
+
+        const destinationUrl = new URL(event.destination.url);
+
+        // Non-SPA destination
+        if (!handlesUrl(destinationUrl))
+            return;
+
+        // Navigating to the current URL should neither reload nor re-render.
+        if (event.cancelable && destinationUrl.href === location.href)
+            return void event.preventDefault();
+
+        // Scrolling is left to intercept(): to the top on push, restored on traverse.
+        event.intercept({handler: async () => void await navigate(destinationUrl)});
+    });
+}
+
 export function setUpSpaRouting(
     paths: string[],
     getRenderableValue: (name: string) => Promise<any>,
@@ -57,29 +93,8 @@ export function setUpSpaRouting(
     // The initial render is not a navigation; a transition would just cross-fade the loading state.
     addEventListener("DOMContentLoaded", () => renderSpa(location.pathname, false));
 
-    // Browsers without the Navigation API (Firefox ESR, older Safari) get full-page navigations instead.
-    (window as {navigation?: Navigation}).navigation?.addEventListener("navigate", event => {
-        // Left to the browser: navigations that cannot be intercepted (cross-origin or
-        // cross-document-only), downloads, fragment scrolling, and form submissions.
-        if (!event.canIntercept || event.hashChange || event.downloadRequest !== null || event.formData !== null)
-            return;
-
-        // Only handle pushes and history traversals: `replace` is URL state syncing
-        // (e.g. filter params) and `reload` should fetch a fresh document.
-        if (event.navigationType !== "push" && event.navigationType !== "traverse")
-            return;
-
-        const destinationUrl = new URL(event.destination.url);
-
-        // Non-SPA path
-        if (!paths.includes(destinationUrl.pathname))
-            return;
-
-        // Navigating to the current URL should neither reload nor re-render.
-        if (event.cancelable && destinationUrl.href === location.href)
-            return void event.preventDefault();
-
-        // Scrolling is left to intercept(): to the top on push, restored on traverse.
-        event.intercept({handler: () => renderSpa(destinationUrl.pathname)});
-    });
+    interceptSpaNavigation(
+        url => paths.includes(url.pathname),
+        url => renderSpa(url.pathname),
+    );
 }

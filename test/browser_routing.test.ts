@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {afterEach, test} from "node:test";
 
-import {setUpSpaRouting} from "../src/browser/routing.js";
+import {interceptSpaNavigation, setUpSpaRouting} from "../src/browser/routing.js";
 import {installStubs, tick, type Stubs} from "./browser_stubs.js";
 
 let stubs: Stubs | null = null;
@@ -161,6 +161,61 @@ test("a failed page import reloads once and does not loop", async () => {
 
     await assert.rejects(stubs!.dispatch("DOMContentLoaded"), /chunk gone/);
     assert.equal(stubs!.location.reloadCount, 1);
+});
+
+test("an intercepted navigation hands the destination to the app, query string and all", async () => {
+    stubs = installStubs({navigation: true});
+    const navigated: string[] = [];
+
+    interceptSpaNavigation(url => url.pathname === "/unread", url => void navigated.push(url.href));
+
+    const event = navigateEvent("https://example.test/unread?feed=abc");
+    await stubs.dispatchNavigate(event);
+    await Promise.all(event.intercepted);
+
+    assert.deepEqual(navigated, ["https://example.test/unread?feed=abc"]);
+});
+
+test("navigations the app does not answer for are left to the browser", async () => {
+    const testCases = [
+        {name: "not interceptable", url: "https://example.test/unread", overrides: {canIntercept: false}},
+        {name: "fragment", url: "https://example.test/unread", overrides: {hashChange: true}},
+        {name: "download", url: "https://example.test/unread", overrides: {downloadRequest: "report.pdf"}},
+        {name: "form submission", url: "https://example.test/unread", overrides: {formData: new FormData()}},
+        {name: "replace", url: "https://example.test/unread", overrides: {navigationType: "replace"}},
+        {name: "reload", url: "https://example.test/unread", overrides: {navigationType: "reload"}},
+        {name: "unhandled destination", url: "https://example.test/docs/manual.pdf", overrides: {}},
+    ];
+
+    for (const testCase of testCases) {
+        stubs = installStubs({navigation: true});
+        const navigated: string[] = [];
+
+        interceptSpaNavigation(url => url.pathname === "/unread", url => void navigated.push(url.href));
+
+        const event = navigateEvent(testCase.url, testCase.overrides);
+        await stubs.dispatchNavigate(event);
+
+        assert.deepEqual(navigated, [], testCase.name);
+        assert.equal(event.intercepted.length, 0, testCase.name);
+
+        stubs.restore();
+        stubs = null;
+    }
+});
+
+test("an intercepted navigation to the current URL is cancelled rather than re-applied", async () => {
+    stubs = installStubs({href: "https://example.test/unread", navigation: true});
+    const navigated: string[] = [];
+
+    interceptSpaNavigation(() => true, url => void navigated.push(url.href));
+
+    const event = navigateEvent("https://example.test/unread");
+    await stubs.dispatchNavigate(event);
+
+    assert.equal(event.preventDefaultCount, 1);
+    assert.equal(event.intercepted.length, 0);
+    assert.deepEqual(navigated, []);
 });
 
 test("a successful import clears an earlier reload marker", async () => {
