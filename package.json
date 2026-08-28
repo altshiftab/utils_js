@@ -49,6 +49,22 @@
         "./browser/published_date": {
             "import": "./dist/browser/published_date.js",
             "types": "./dist/browser/published_date.d.ts"
+        },
+        "./browser/native_messaging": {
+            "import": "./dist/browser/native_messaging.js",
+            "types": "./dist/browser/native_messaging.d.ts"
+        },
+        "./browser/editable": {
+            "import": "./dist/browser/editable.js",
+            "types": "./dist/browser/editable.d.ts"
+        },
+        "./browser/segment": {
+            "import": "./dist/browser/segment.js",
+            "types": "./dist/browser/segment.d.ts"
+        },
+        "./browser/text_offsets": {
+            "import": "./dist/browser/text_offsets.js",
+            "types": "./dist/browser/text_offsets.d.ts"
         }
     },
     "scripts": {
