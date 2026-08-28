@@ -8,6 +8,18 @@
  * every rule below resolves ambiguity by excluding, and a field is read only when it is positively
  * recognised as prose rather than when nothing objected to it.
  *
+ * `spellcheck="false"` is deliberately not one of the rules, having been one and been wrong. The
+ * reasoning was that an author setting it is declaring the contents are not prose -- code editors,
+ * licence keys, identifier fields. What actually sets it is every rich text editor worth checking:
+ * Gmail's compose body carries it, because Gmail does its own checking and does not want the
+ * browser's underlines on top of its own. Excluding on it meant excluding the single place this is
+ * most wanted, which was found by a field reporting the rule that refused it rather than by
+ * reading the markup and guessing.
+ *
+ * The rule was politeness rather than protection, and nothing was lost with it: a password, a
+ * one-time code and a card number are caught by their type, their autocomplete or their name, none
+ * of which an editor sets by accident.
+ *
  * The element surface touched here is small on purpose -- `tagName`, `getAttribute`,
  * `hasAttribute`, `closest`, `isContentEditable`, `value`, `innerText`, `disabled`, `readOnly` --
  * so that a test can supply a stand-in for it without a DOM implementation.
@@ -123,7 +135,6 @@ export function isEditable(element: Element): boolean {
 export type SensitivityReason =
     | "input-type"
     | "autocomplete"
-    | "spellcheck"
     | "inputmode"
     | "name"
     | "aria-hidden";
@@ -156,13 +167,6 @@ export function sensitivityReason(element: Element): SensitivityReason | null {
     const tokens = autocompleteTokens(candidate);
     if (tokens.some(token => secretAutocompleteTokens.has(token) || token.startsWith("cc-")))
         return "autocomplete";
-
-    // `spellcheck="false"` is the author saying the contents are not prose. Code editors, licence
-    // keys and identifier fields set it, and every one of them is something to leave alone. The
-    // attribute is read rather than the property because the property is `true` by inheritance on
-    // most elements, which would make the signal invisible.
-    if ((candidate.getAttribute("spellcheck") ?? "").toLowerCase() === "false")
-        return "spellcheck";
 
     // A numeric or telephone keypad is not asked for to type sentences on.
     if (["numeric", "tel", "decimal"].includes((candidate.getAttribute("inputmode") ?? "").toLowerCase()))

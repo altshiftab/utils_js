@@ -105,10 +105,6 @@ test("secrets are refused", () => {
             element: element("INPUT", {attributes: {type: "text", autocomplete: "One-Time-Code"}}),
         },
         {
-            name: "spellcheck turned off by the author",
-            element: element("DIV", {isContentEditable: true, attributes: {spellcheck: "false"}}),
-        },
-        {
             name: "a numeric keypad",
             element: element("INPUT", {attributes: {type: "text", inputmode: "numeric"}}),
         },
@@ -153,6 +149,13 @@ test("ordinary prose fields are not called sensitive", () => {
         {
             name: "spellcheck explicitly on",
             element: element("DIV", {isContentEditable: true, attributes: {spellcheck: "true"}}),
+        },
+        // The rule that used to refuse this one. Gmail's compose body sets spellcheck="false"
+        // because it does its own checking, and refusing on it excluded the place a checker is
+        // most wanted. Kept as a case so that the rule cannot come back by accident.
+        {
+            name: "a rich editor that turns the browser's own checking off",
+            element: element("DIV", {isContentEditable: true, attributes: {spellcheck: "false"}}),
         },
         // The other side of the balance. Every one of these contains a short secret name as a
         // substring -- pin, pass, csc -- and refusing them would mean refusing ordinary prose.
@@ -211,11 +214,6 @@ test("the refusing rule names itself", () => {
             expected: "autocomplete",
         },
         {
-            name: "spellcheck",
-            element: element("DIV", {isContentEditable: true, attributes: {spellcheck: "false"}}),
-            expected: "spellcheck",
-        },
-        {
             name: "inputmode",
             element: element("INPUT", {attributes: {type: "text", inputmode: "numeric"}}),
             expected: "inputmode",
@@ -245,4 +243,50 @@ test("the refusing rule names itself", () => {
             `${testCase.name}: isSensitive agrees with the reason`,
         );
     }
+});
+
+// The field this was all built for, in the shape it actually has. It was refused for a fortnight's
+// worth of reasoning about what spellcheck="false" means, and the answer turned out to be "this
+// editor does its own checking" rather than "this is not prose". Pinned as the markup rather than
+// as the attribute, so that the case cannot be lost to a refactor that keeps the attribute test.
+test("a Gmail-shaped compose body is checked", () => {
+    const composeBody = element("DIV", {
+        isContentEditable: true,
+        attributes: {
+            "aria-label": "Message Body",
+            "role": "textbox",
+            "aria-multiline": "true",
+            "contenteditable": "true",
+            "spellcheck": "false",
+            "tabindex": "1",
+            "g_editable": "true",
+        },
+        innerText: "Jag kan inte sluta tänkaaa på dig.",
+    });
+
+    assert.equal(sensitivityReason(composeBody), null, "nothing refuses it");
+    assert.equal(isEditable(composeBody), true, "it is checked");
+    assert.equal(readText(composeBody), "Jag kan inte sluta tänkaaa på dig.", "and read");
+});
+
+// Removing a rule must not have loosened the ones that matter. A secret in a rich editor that also
+// turns spellchecking off is still a secret.
+test("dropping the spellcheck rule did not weaken the real ones", () => {
+    const testCases = [
+        {
+            name: "a password field that also sets spellcheck",
+            element: element("INPUT", {attributes: {type: "password", spellcheck: "false"}}),
+        },
+        {
+            name: "a one-time code that also sets spellcheck",
+            element: element("INPUT", {attributes: {type: "text", autocomplete: "one-time-code", spellcheck: "false"}}),
+        },
+        {
+            name: "a contenteditable named secret that also sets spellcheck",
+            element: element("DIV", {isContentEditable: true, attributes: {id: "api-secret", spellcheck: "false"}}),
+        },
+    ];
+
+    for (const testCase of testCases)
+        assert.equal(isEditable(testCase.element), false, testCase.name);
 });
