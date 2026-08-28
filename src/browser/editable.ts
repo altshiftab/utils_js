@@ -119,6 +119,15 @@ export function isEditable(element: Element): boolean {
     return editable && !isSensitive(element);
 }
 
+/** Why a field was refused. Named so that a caller can say which rule fired, not merely that one did. */
+export type SensitivityReason =
+    | "input-type"
+    | "autocomplete"
+    | "spellcheck"
+    | "inputmode"
+    | "name"
+    | "aria-hidden";
+
 /**
  * Whether the field must be left alone.
  *
@@ -126,35 +135,47 @@ export function isEditable(element: Element): boolean {
  * the user focused, one handed over by an event -- can ask the question directly.
  */
 export function isSensitive(element: Element): boolean {
+    return sensitivityReason(element) !== null;
+}
+
+/**
+ * Which rule refused the field, or null if none did.
+ *
+ * The reason is returned rather than a boolean because "nothing happened" is the hardest state to
+ * debug in a tool like this: a field that is silently skipped looks exactly like a field with
+ * nothing wrong in it, and without the rule's name the only way to tell them apart is to reason
+ * about the markup and guess. `isSensitive` is this with the answer thrown away.
+ */
+export function sensitivityReason(element: Element): SensitivityReason | null {
     const candidate = asEditable(element);
     const tagName = candidate.tagName.toLowerCase();
 
     if (tagName === "input" && !proseInputTypes.has(inputType(candidate)))
-        return true;
+        return "input-type";
 
     const tokens = autocompleteTokens(candidate);
     if (tokens.some(token => secretAutocompleteTokens.has(token) || token.startsWith("cc-")))
-        return true;
+        return "autocomplete";
 
     // `spellcheck="false"` is the author saying the contents are not prose. Code editors, licence
     // keys and identifier fields set it, and every one of them is something to leave alone. The
     // attribute is read rather than the property because the property is `true` by inheritance on
     // most elements, which would make the signal invisible.
     if ((candidate.getAttribute("spellcheck") ?? "").toLowerCase() === "false")
-        return true;
+        return "spellcheck";
 
     // A numeric or telephone keypad is not asked for to type sentences on.
     if (["numeric", "tel", "decimal"].includes((candidate.getAttribute("inputmode") ?? "").toLowerCase()))
-        return true;
+        return "inputmode";
 
     for (const attribute of ["name", "id", "aria-label", "placeholder"]) {
         if (namesASecret(candidate.getAttribute(attribute) ?? ""))
-            return true;
+            return "name";
     }
 
     // Hidden from assistive technology means hidden from this too: it is either not really a field
     // or it is a trap set for something that fills fields indiscriminately.
-    return candidate.closest("[aria-hidden='true']") !== null;
+    return candidate.closest("[aria-hidden='true']") !== null ? "aria-hidden" : null;
 }
 
 /**

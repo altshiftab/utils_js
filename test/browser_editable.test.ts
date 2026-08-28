@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import {isEditable, isSensitive, readText} from "../src/browser/editable.js";
+import {isEditable, isSensitive, readText, sensitivityReason} from "../src/browser/editable.js";
 
 interface ElementOptions {
     attributes?: Record<string, string>;
@@ -193,4 +193,56 @@ test("readText takes the value from a control and the rendered text from a conte
 
     for (const testCase of testCases)
         assert.equal(readText(testCase.element), testCase.expected, testCase.name);
+});
+
+// The reason exists so that a field skipped in the wild can be explained without reading the
+// markup and guessing. Each rule is asserted to name itself, because a reason that says the wrong
+// thing is worse than a boolean: it sends whoever is debugging to the wrong rule.
+test("the refusing rule names itself", () => {
+    const testCases = [
+        {
+            name: "input-type",
+            element: element("INPUT", {attributes: {type: "password"}}),
+            expected: "input-type",
+        },
+        {
+            name: "autocomplete",
+            element: element("INPUT", {attributes: {type: "text", autocomplete: "one-time-code"}}),
+            expected: "autocomplete",
+        },
+        {
+            name: "spellcheck",
+            element: element("DIV", {isContentEditable: true, attributes: {spellcheck: "false"}}),
+            expected: "spellcheck",
+        },
+        {
+            name: "inputmode",
+            element: element("INPUT", {attributes: {type: "text", inputmode: "numeric"}}),
+            expected: "inputmode",
+        },
+        {
+            name: "name",
+            element: element("INPUT", {attributes: {type: "text", name: "user_pwd"}}),
+            expected: "name",
+        },
+        {
+            name: "aria-hidden",
+            element: element("TEXTAREA", {hiddenFromAssistiveTechnology: true}),
+            expected: "aria-hidden",
+        },
+        {
+            name: "an ordinary field is refused by nothing",
+            element: element("TEXTAREA", {attributes: {name: "comment"}}),
+            expected: null,
+        },
+    ];
+
+    for (const testCase of testCases) {
+        assert.equal(sensitivityReason(testCase.element), testCase.expected, testCase.name);
+        assert.equal(
+            isSensitive(testCase.element),
+            testCase.expected !== null,
+            `${testCase.name}: isSensitive agrees with the reason`,
+        );
+    }
 });
