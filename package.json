@@ -1,6 +1,7 @@
 {
     "name": "@altshiftab/utils",
     "version": "0.0.16",
+    "license": "MIT",
     "type": "module",
     "repository": {
         "type": "git",

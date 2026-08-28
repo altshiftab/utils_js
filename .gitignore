@@ -1,5 +1,6 @@
 *
 !/.gitignore
+!/LICENSE
 !/.npmignore
 !/package.json
 !/package-lock.json
