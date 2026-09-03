@@ -11,8 +11,6 @@ interface ElementOptions {
     value?: string;
     innerText?: string;
     textContent?: string;
-    /** Whether an ancestor carries `aria-hidden="true"`, which is what `closest` is asked. */
-    hiddenFromAssistiveTechnology?: boolean;
 }
 
 /**
@@ -21,7 +19,7 @@ interface ElementOptions {
  * here rather than silently getting `undefined` and deciding a password field is prose.
  */
 function element(tagName: string, options: ElementOptions = {}) {
-    const {attributes = {}, hiddenFromAssistiveTechnology = false} = options;
+    const {attributes = {}} = options;
 
     return {
         tagName,
@@ -33,8 +31,6 @@ function element(tagName: string, options: ElementOptions = {}) {
         textContent: options.textContent ?? null,
         getAttribute: (name: string) => attributes[name] ?? null,
         hasAttribute: (name: string) => name in attributes,
-        closest: (selectors: string) =>
-            selectors === "[aria-hidden='true']" && hiddenFromAssistiveTechnology ? {} : null,
     } as unknown as Element;
 }
 
@@ -124,10 +120,6 @@ test("secrets are refused", () => {
         {
             name: "a contenteditable named secret",
             element: element("DIV", {isContentEditable: true, attributes: {id: "api-secret"}}),
-        },
-        {
-            name: "hidden from assistive technology",
-            element: element("INPUT", {attributes: {type: "text"}, hiddenFromAssistiveTechnology: true}),
         },
     ];
 
@@ -224,11 +216,6 @@ test("the refusing rule names itself", () => {
             expected: "name",
         },
         {
-            name: "aria-hidden",
-            element: element("TEXTAREA", {hiddenFromAssistiveTechnology: true}),
-            expected: "aria-hidden",
-        },
-        {
             name: "an ordinary field is refused by nothing",
             element: element("TEXTAREA", {attributes: {name: "comment"}}),
             expected: null,
@@ -284,6 +271,61 @@ test("dropping the spellcheck rule did not weaken the real ones", () => {
         {
             name: "a contenteditable named secret that also sets spellcheck",
             element: element("DIV", {isContentEditable: true, attributes: {id: "api-secret", spellcheck: "false"}}),
+        },
+    ];
+
+    for (const testCase of testCases)
+        assert.equal(isEditable(testCase.element), false, testCase.name);
+});
+
+// The second field this was built for, in the shape it actually has. It was refused because
+// Outlook's application shell marks the region its editor sits in `aria-hidden="true"`, which the
+// field itself has no trace of -- so it is pinned as the markup, since no attribute of this
+// element was ever the problem.
+//
+// The stand-in has no `closest` at all any more, which is the other half of the pin: a rule that
+// went looking for an ancestor again would fail here rather than quietly refuse a compose body.
+test("an Outlook-shaped compose body is checked", () => {
+    const composeBody = element("DIV", {
+        isContentEditable: true,
+        attributes: {
+            "aria-label": "Message body",
+            "role": "textbox",
+            "aria-multiline": "true",
+            "contenteditable": "true",
+        },
+        innerText: "Tack för senast! Det var jätteroligt att ses.",
+    });
+
+    assert.equal(sensitivityReason(composeBody), null, "nothing refuses it");
+    assert.equal(isEditable(composeBody), true, "it is checked");
+    assert.equal(readText(composeBody), "Tack för senast! Det var jätteroligt att ses.", "and read");
+});
+
+// The rule that went was the only one that ever looked past the field itself, so what has to be
+// shown is that a secret is still refused on its own account. Each of these would have been
+// refused twice over before and must still be refused once.
+test("dropping the aria-hidden rule did not weaken the real ones", () => {
+    const testCases = [
+        {
+            name: "a password field in a region kept from screen readers",
+            element: element("INPUT", {attributes: {type: "password"}}),
+        },
+        {
+            name: "a one-time code in one",
+            element: element("INPUT", {attributes: {type: "text", autocomplete: "one-time-code"}}),
+        },
+        {
+            name: "a card number in one",
+            element: element("INPUT", {attributes: {type: "text", autocomplete: "cc-number"}}),
+        },
+        {
+            name: "a contenteditable named secret in one",
+            element: element("DIV", {isContentEditable: true, attributes: {id: "api-secret"}}),
+        },
+        {
+            name: "a numeric keypad in one",
+            element: element("INPUT", {attributes: {type: "text", inputmode: "numeric"}}),
         },
     ];
 

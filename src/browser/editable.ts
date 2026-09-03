@@ -20,9 +20,21 @@
  * one-time code and a card number are caught by their type, their autocomplete or their name, none
  * of which an editor sets by accident.
  *
+ * An ancestor with `aria-hidden="true"` was a rule for the same length of time and went the same
+ * way. The reasoning was that a subtree kept out of the accessibility tree is either not really a
+ * field or is a trap for something that fills fields indiscriminately. What actually puts a
+ * compose body inside one is an application shell: Outlook's marks the region its editor sits in,
+ * which is Outlook's accessibility bug and says nothing whatever about whether the contents are a
+ * secret. The trap it was aimed at is sprung by enumerating a page's fields and filling them, and
+ * a caller that reads the one field a person put their caret in never enumerates anything -- a
+ * honeypot is not focused by a person and not written in by one.
+ *
+ * Both removals were found the same way, and it is the way to find the next one: by a field
+ * reporting the rule that refused it, rather than by reading the markup and guessing.
+ *
  * The element surface touched here is small on purpose -- `tagName`, `getAttribute`,
- * `hasAttribute`, `closest`, `isContentEditable`, `value`, `innerText`, `disabled`, `readOnly` --
- * so that a test can supply a stand-in for it without a DOM implementation.
+ * `hasAttribute`, `isContentEditable`, `value`, `innerText`, `disabled`, `readOnly` -- so that a
+ * test can supply a stand-in for it without a DOM implementation.
  */
 
 /** Input types that hold prose. Everything else, `email`, `url` and `tel` included, does not. */
@@ -89,7 +101,6 @@ interface EditableLike {
     textContent?: string | null;
     getAttribute(name: string): string | null;
     hasAttribute(name: string): boolean;
-    closest(selectors: string): unknown;
 }
 
 function asEditable(element: Element): EditableLike {
@@ -136,8 +147,7 @@ export type SensitivityReason =
     | "input-type"
     | "autocomplete"
     | "inputmode"
-    | "name"
-    | "aria-hidden";
+    | "name";
 
 /**
  * Whether the field must be left alone.
@@ -177,9 +187,7 @@ export function sensitivityReason(element: Element): SensitivityReason | null {
             return "name";
     }
 
-    // Hidden from assistive technology means hidden from this too: it is either not really a field
-    // or it is a trap set for something that fills fields indiscriminately.
-    return candidate.closest("[aria-hidden='true']") !== null ? "aria-hidden" : null;
+    return null;
 }
 
 /**
