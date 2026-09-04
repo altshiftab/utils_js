@@ -242,3 +242,116 @@ test("a runtime that cannot connect surfaces as a NativeHostError", async () => 
         return true;
     });
 });
+
+// Abandoning a request stops this side listening; it does not stop the host working. For a host
+// spending money on the question -- a model asked something -- that is a request paid for and
+// thrown away, and only the host can stop it.
+test("aborting tells the host to stop, when there is something to tell it", async () => {
+    const runtime = new RuntimeStub();
+    const host = connectNativeHost("test", {
+        runtime,
+        cancelMessage: id => ({type: "cancel", cancel_id: id}),
+    });
+
+    const controller = new AbortController();
+    const request = host.request({type: "correct"}, controller.signal);
+
+    const sent = runtime.port.sent[0] as {id: number};
+
+    controller.abort();
+
+    await assert.rejects(request, NativeHostError);
+
+    assert.deepEqual(
+        runtime.port.sent[1],
+        {type: "cancel", cancel_id: sent.id},
+        "the cancel names the request by the id it was sent under",
+    );
+});
+
+// A timeout abandons a request as thoroughly as an abort does, and left unsaid it is the expensive
+// one: nobody clicked anything, so nothing else is going to notice the host is still working.
+test("a timeout tells the host to stop too", async () => {
+    const runtime = new RuntimeStub();
+    const host = connectNativeHost("test", {
+        runtime,
+        timeoutMs: 1,
+        cancelMessage: id => ({type: "cancel", cancel_id: id}),
+    });
+
+    await assert.rejects(host.request({type: "correct"}), NativeHostError);
+
+    assert.equal(runtime.port.sent.length, 2, "the request, then the cancel");
+    assert.equal((runtime.port.sent[1] as {type: string}).type, "cancel");
+});
+
+// The default has to stay silent. A host that knows nothing of cancelling would see an unknown
+// message, and some answer it with an error that the extension then has to explain away.
+test("nothing is sent when no cancel message was given", async () => {
+    const runtime = new RuntimeStub();
+    const host = connectNativeHost("test", {runtime});
+
+    const controller = new AbortController();
+    const request = host.request({type: "correct"}, controller.signal);
+
+    controller.abort();
+
+    await assert.rejects(request, NativeHostError);
+
+    assert.equal(runtime.port.sent.length, 1, "only the request itself");
+});
+
+test("returning null declines to cancel that request", async () => {
+    const runtime = new RuntimeStub();
+    const host = connectNativeHost("test", {runtime, cancelMessage: () => null});
+
+    const controller = new AbortController();
+    const request = host.request({type: "correct"}, controller.signal);
+
+    controller.abort();
+
+    await assert.rejects(request, NativeHostError);
+
+    assert.equal(runtime.port.sent.length, 1, "only the request itself");
+});
+
+// A signal already aborted means the request was never sent, so there is nothing for the host to
+// stop -- and a cancel naming an id it never saw is noise at best.
+test("a request that was never sent is not cancelled", async () => {
+    const runtime = new RuntimeStub();
+    const host = connectNativeHost("test", {
+        runtime,
+        cancelMessage: id => ({type: "cancel", cancel_id: id}),
+    });
+
+    await assert.rejects(
+        host.request({type: "correct"}, AbortSignal.abort()),
+        NativeHostError,
+    );
+
+    assert.equal(runtime.connectCount, 0, "the port was never even opened");
+});
+
+// The host being gone is a stronger cancellation than any message, and posting to a dead port
+// throws. Failing the abort for it would replace the caller's reason for giving up with an
+// incidental one.
+test("a cancel is not attempted, and cannot fail, once the port has gone", async () => {
+    const runtime = new RuntimeStub();
+    const host = connectNativeHost("test", {
+        runtime,
+        cancelMessage: id => ({type: "cancel", cancel_id: id}),
+    });
+
+    const controller = new AbortController();
+    const request = host.request({type: "correct"}, controller.signal);
+
+    runtime.port.dropped();
+
+    await assert.rejects(request, NativeHostError);
+
+    // The abort arrives after the host has already gone, which is the ordinary order when a page
+    // is torn down: everything is abandoned at once.
+    controller.abort();
+
+    assert.equal(runtime.port.sent.length, 1, "nothing was posted to a dead port");
+});

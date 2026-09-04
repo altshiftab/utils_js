@@ -13,6 +13,13 @@
  *
  * The port is opened on the first request and kept, since opening one starts a process, and an
  * extension that reconnected per request would pay a process start on every keystroke.
+ *
+ * Giving up on a request -- an abort, a timeout -- stops this side listening and nothing more. The
+ * host has no idea and goes on working, which for a host that is spending money or minutes on the
+ * question is a request paid for and thrown away. `cancelMessage` is how a caller says so, and it
+ * is the caller's shape rather than one imposed here: native messaging has no cancellation to
+ * conform to, and requiring every host to understand one invented here would be a tax on the hosts
+ * that have nothing to cancel.
  */
 
 /** The part of a `runtime.Port` used here. Narrow so a test can supply one without a browser. */
@@ -38,6 +45,23 @@ export interface NativeHostOptions {
     runtime?: RuntimeLike;
     /** Milliseconds before an unanswered request is abandoned. Zero or absent waits indefinitely. */
     timeoutMs?: number;
+    /**
+     * What to send when a request is abandoned, given the id it was sent under.
+     *
+     * Abandoning a request stops this side listening; it does not stop the host working. Where the
+     * host is doing something that costs -- a model asked a question, a file being read -- that is
+     * a request paid for and thrown away, and the host is the only one who can stop it.
+     *
+     * The shape is the caller's because there is no cancellation in native messaging to conform
+     * to: what a host understands is between the caller and its host. Absent, nothing is sent and
+     * the host runs to completion, which is right for a host that cannot cancel and wrong for one
+     * that can. Returning null for a particular id declines to cancel that one.
+     *
+     * The id is supplied because it is assigned here, so a caller cannot name the request without
+     * being told. What comes back is posted as it is: it is not a request, it takes no id of its
+     * own, and no reply is waited for.
+     */
+    cancelMessage?: (id: number) => object | null;
 }
 
 export interface NativeHost {
@@ -46,6 +70,9 @@ export interface NativeHost {
      *
      * Rejects if the host disconnects, if `timeoutMs` elapses, or if `signal` aborts. In every one
      * of those cases the reply, should it still arrive, is discarded rather than delivered late.
+     *
+     * Rejecting is this side giving up, not the host stopping. Where the host can be told, a
+     * `cancelMessage` tells it; without one it finishes the work and answers into the void.
      */
     request<Response>(message: object, signal?: AbortSignal): Promise<Response>;
     /** Closes the port, which ends the host process. In-flight requests reject. */
@@ -77,7 +104,7 @@ function defaultRuntime(): RuntimeLike {
 }
 
 export function connectNativeHost(name: string, options: NativeHostOptions = {}): NativeHost {
-    const {runtime = defaultRuntime(), timeoutMs = 0} = options;
+    const {runtime = defaultRuntime(), timeoutMs = 0, cancelMessage} = options;
 
     const pending = new Map<number, Pending>();
     let port: PortLike | null = null;
@@ -97,6 +124,29 @@ export function connectNativeHost(name: string, options: NativeHostOptions = {})
         for (const entry of failed) {
             entry.cleanUp();
             entry.reject(new NativeHostError(error ? `${reason}: ${error}` : reason));
+        }
+    }
+
+    /**
+     * Tells the host to stop working on a request nothing is waiting for any more.
+     *
+     * Only where there is still a port. A request abandoned because the port went away needs no
+     * cancelling: the host is gone, which is a stronger cancellation than a message could be.
+     */
+    function abandon(id: number) {
+        if (!port || !cancelMessage)
+            return;
+
+        const message = cancelMessage(id);
+        if (!message)
+            return;
+
+        try {
+            port.postMessage(message);
+        } catch {
+            // The port died between the abandonment and this, so the host has stopped anyway.
+            // Failing the abandonment for it would replace the caller's reason for giving up --
+            // an abort, a timeout -- with an incidental one.
         }
     }
 
@@ -146,6 +196,7 @@ export function connectNativeHost(name: string, options: NativeHostOptions = {})
                 const onAbort = () => {
                     pending.delete(id);
                     cleanUp();
+                    abandon(id);
                     reject(new NativeHostError("The request was aborted."));
                 };
 
@@ -159,6 +210,9 @@ export function connectNativeHost(name: string, options: NativeHostOptions = {})
                     timer = setTimeout(() => {
                         pending.delete(id);
                         cleanUp();
+                        // A timeout abandons a request as thoroughly as an abort does. The host is
+                        // still working on it, and after this nobody is waiting for the answer.
+                        abandon(id);
                         reject(new NativeHostError(`The native application did not answer within ${timeoutMs} ms.`));
                     }, timeoutMs);
                     // Under node -- where these are tested -- a pending timer keeps the process
