@@ -1,6 +1,6 @@
 {
     "name": "@altshiftab/utils",
-    "version": "0.0.18",
+    "version": "0.0.19",
     "license": "MIT",
     "type": "module",
     "repository": {
@@ -66,6 +66,10 @@
         "./browser/text_offsets": {
             "import": "./dist/browser/text_offsets.js",
             "types": "./dist/browser/text_offsets.d.ts"
+        },
+        "./browser/locale": {
+            "import": "./dist/browser/locale.js",
+            "types": "./dist/browser/locale.d.ts"
         }
     },
     "scripts": {
