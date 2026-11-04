@@ -45,11 +45,21 @@ export interface StubOptions {
     reducedMotion?: boolean;
     navigation?: boolean;
     respond?: (call: FetchCall) => Response | Promise<Response>;
+    // What `navigator.onLine` starts as; the stub's `onLine` changes it afterwards.
+    onLine?: boolean;
+}
+
+export interface TimeoutStub {
+    callback: () => unknown;
+    ms: number | undefined;
+    cleared: boolean;
 }
 
 export interface Stubs {
     fetchCalls: FetchCall[];
     intervals: {callback: () => unknown; ms: number | undefined}[];
+    timeouts: TimeoutStub[];
+    onLine: boolean;
     location: LocationStub;
     sessionStorageData: Map<string, string>;
     visibilityState: DocumentVisibilityState;
@@ -72,11 +82,12 @@ export function installStubs(options: StubOptions = {}): Stubs {
         reducedMotion = false,
         navigation = false,
         respond = () => new Response(null, {status: 204}),
+        onLine = true,
     } = options;
 
     const names = [
         "addEventListener", "document", "window", "location", "matchMedia",
-        "sessionStorage", "setInterval", "fetch", "Date",
+        "sessionStorage", "setInterval", "setTimeout", "clearTimeout", "fetch", "Date", "navigator",
     ];
     const saved = names.map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 
@@ -103,6 +114,8 @@ export function installStubs(options: StubOptions = {}): Stubs {
     const stubs: Stubs = {
         fetchCalls: [],
         intervals: [],
+        timeouts: [],
+        onLine,
         location: new LocationStub(href),
         sessionStorageData: new Map(),
         visibilityState: "visible",
@@ -160,10 +173,31 @@ export function installStubs(options: StubOptions = {}): Stubs {
             stubs.intervals.push({callback, ms});
             return stubs.intervals.length;
         },
+        // Captured too, for the same reason, and so that a test runs a retry when it chooses. The
+        // handle is the index plus one, so that clearing marks the right one.
+        setTimeout: (callback: () => unknown, ms?: number) => {
+            stubs.timeouts.push({callback, ms, cleared: false});
+            return stubs.timeouts.length;
+        },
+        clearTimeout: (handle?: number) => {
+            const timeout = handle === undefined ? undefined : stubs.timeouts[handle - 1];
+            if (timeout)
+                timeout.cleared = true;
+        },
         fetch: (input: unknown, init?: RequestInit) => {
             const call = {input, init};
             stubs.fetchCalls.push(call);
             return Promise.resolve(respond(call));
+        },
+    });
+
+    // Node has a navigator of its own, held by a getter, so it is replaced rather than assigned to.
+    Object.defineProperty(globalThis, "navigator", {
+        configurable: true,
+        value: {
+            get onLine() {
+                return stubs.onLine;
+            },
         },
     });
 
