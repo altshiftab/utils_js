@@ -1,6 +1,6 @@
 {
     "name": "@altshiftab/utils",
-    "version": "0.0.20",
+    "version": "0.0.21",
     "license": "MIT",
     "type": "module",
     "repository": {
@@ -38,6 +38,10 @@
         "./browser/session": {
             "import": "./dist/browser/session.js",
             "types": "./dist/browser/session.d.ts"
+        },
+        "./browser/drafts": {
+            "import": "./dist/browser/drafts.js",
+            "types": "./dist/browser/drafts.d.ts"
         },
         "./browser/view_transition": {
             "import": "./dist/browser/view_transition.js",
