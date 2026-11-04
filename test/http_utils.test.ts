@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import {afterEach, test} from "node:test";
 
 import {BadStatusCodeError, FetchError} from "../src/http/errors.js";
-import {fetchEx, getBadStatusCodeErrorMessage, problemDetailFromResponseText} from "../src/http/utils.js";
+import type {RequestInitEx, UnauthorizedHandler} from "../src/http/types.js";
+import {
+    fetchEx,
+    fetchWithRequest,
+    getBadStatusCodeErrorMessage,
+    problemDetailFromResponseText,
+    setUnauthorizedHandler,
+} from "../src/http/utils.js";
+import {tick} from "./browser_stubs.js";
 
 type Respond = (request: Request) => Response | Promise<Response>;
 
@@ -11,6 +19,7 @@ let restore: (() => void) | null = null;
 afterEach(() => {
     restore?.();
     restore = null;
+    setUnauthorizedHandler(null);
 });
 
 function installFetch(respond: Respond) {
@@ -131,4 +140,161 @@ test("the bad status code message falls back to the raw body, then the error its
     const withoutBody = await fetchEx("https://example.test/thing").catch((error: unknown) => error);
     assert.ok(withoutBody instanceof BadStatusCodeError);
     assert.match(getBadStatusCodeErrorMessage(withoutBody), /bad status code/);
+});
+
+/**
+ * A fetch that reads each request's body as a real send does, so that a request sent twice must
+ * have been cloned before its first send: the original's body is gone by the second.
+ */
+function installConsumingFetch(statuses: number[]) {
+    const bodies: string[] = [];
+    const saved = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+
+    (globalThis as unknown as Record<string, unknown>).fetch = async (request: Request) => {
+        bodies.push(await request.text());
+        const status = statuses[bodies.length - 1] ?? 200;
+        return new Response(status === 401 ? "expired" : "done", {status});
+    };
+
+    restore = () => {
+        if (saved) {
+            Object.defineProperty(globalThis, "fetch", saved);
+        } else {
+            delete (globalThis as unknown as Record<string, unknown>).fetch;
+        }
+    };
+
+    return bodies;
+}
+
+test("a 401 is offered to the unauthorized handler, and the request sent again when it says so", async () => {
+    const testCases: {
+        name: string;
+        statuses: number[];
+        answer: boolean | "throws" | null;
+        options?: RequestInitEx;
+        wantSends: number;
+        wantAsked: number;
+        wantStatus: number;
+        wantThrown: boolean;
+    }[] = [
+        {name: "renewed, then answered", statuses: [401, 200], answer: true, wantSends: 2, wantAsked: 1, wantStatus: 200, wantThrown: false},
+        {name: "not renewed", statuses: [401], answer: false, wantSends: 1, wantAsked: 1, wantStatus: 401, wantThrown: true},
+        {name: "a handler that throws is not renewed", statuses: [401], answer: "throws", wantSends: 1, wantAsked: 1, wantStatus: 401, wantThrown: true},
+        {name: "refused again after renewing", statuses: [401, 401], answer: true, wantSends: 2, wantAsked: 1, wantStatus: 401, wantThrown: true},
+        {name: "no handler set", statuses: [401], answer: null, wantSends: 1, wantAsked: 0, wantStatus: 401, wantThrown: true},
+        {name: "another failure", statuses: [403], answer: true, wantSends: 1, wantAsked: 0, wantStatus: 403, wantThrown: true},
+        {
+            name: "a caller reading the status itself",
+            statuses: [401],
+            answer: true,
+            options: {skipErrorOnStatusCode: true},
+            wantSends: 1,
+            wantAsked: 0,
+            wantStatus: 401,
+            wantThrown: false,
+        },
+        {
+            name: "a caller that keeps its 401",
+            statuses: [401],
+            answer: true,
+            options: {skipUnauthorizedRetry: true},
+            wantSends: 1,
+            wantAsked: 0,
+            wantStatus: 401,
+            wantThrown: true,
+        },
+    ];
+
+    for (const testCase of testCases) {
+        const bodies = installConsumingFetch(testCase.statuses);
+
+        const asked: Request[] = [];
+        if (testCase.answer !== null) {
+            const answer = testCase.answer;
+            setUnauthorizedHandler(async request => {
+                asked.push(request);
+                if (answer === "throws")
+                    throw new Error("broken handler");
+                return answer;
+            });
+        }
+
+        const body = JSON.stringify({name: "a record"});
+        const outcome = await fetchEx("https://example.test/thing", {method: "PUT", body, ...testCase.options})
+            .then(result => ({status: result.response.status, thrown: false, responseBody: result.responseText}))
+            .catch((error: unknown) => {
+                assert.ok(error instanceof BadStatusCodeError, testCase.name);
+                return {status: error.statusCode, thrown: true, responseBody: error.context.responseBody};
+            });
+
+        assert.equal(bodies.length, testCase.wantSends, testCase.name);
+        // What is sent again is the request as it was, body included.
+        for (const sent of bodies)
+            assert.equal(sent, body, testCase.name);
+        assert.equal(asked.length, testCase.wantAsked, testCase.name);
+        if (asked.length > 0)
+            assert.equal(asked[0]!.url, "https://example.test/thing", testCase.name);
+        assert.equal(outcome.status, testCase.wantStatus, testCase.name);
+        assert.equal(outcome.thrown, testCase.wantThrown, testCase.name);
+        // A 401 that is thrown still says why, read from the response that was refused.
+        if (outcome.thrown && outcome.status === 401)
+            assert.equal(outcome.responseBody, "expired", testCase.name);
+
+        restore?.();
+        restore = null;
+        setUnauthorizedHandler(null);
+    }
+});
+
+test("a handler that never settles leaves the call pending", async () => {
+    installConsumingFetch([401]);
+    const never: UnauthorizedHandler = () => new Promise(() => {});
+    setUnauthorizedHandler(never);
+
+    let settled = false;
+    void fetchEx("https://example.test/thing").finally(() => {
+        settled = true;
+    });
+    await tick(4);
+
+    assert.equal(settled, false);
+});
+
+test("the refused response is let go of when another takes its place", async () => {
+    const responses: Response[] = [];
+    const saved = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+    (globalThis as unknown as Record<string, unknown>).fetch = async () => {
+        const response = new Response(responses.length === 0 ? "expired" : "done", {status: responses.length === 0 ? 401 : 200});
+        responses.push(response);
+        return response;
+    };
+    restore = () => {
+        if (saved) {
+            Object.defineProperty(globalThis, "fetch", saved);
+        } else {
+            delete (globalThis as unknown as Record<string, unknown>).fetch;
+        }
+    };
+    setUnauthorizedHandler(async () => true);
+
+    await fetchEx("https://example.test/thing");
+
+    assert.equal(responses.length, 2);
+    assert.equal(responses[0]!.bodyUsed, true);
+});
+
+test("a request whose body is gone already is sent as it was, and fails in the send", async () => {
+    installConsumingFetch([401]);
+    let asked = 0;
+    setUnauthorizedHandler(async () => {
+        asked++;
+        return true;
+    });
+
+    const request = new Request("https://example.test/thing", {method: "PUT", body: "spent"});
+    await request.text();
+
+    await assert.rejects(fetchWithRequest(request), FetchError);
+    assert.equal(asked, 0);
 });

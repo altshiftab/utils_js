@@ -1,14 +1,53 @@
-import {Context, ProblemDetail, RequestInitEx} from "./types.js";
+import {Context, ProblemDetail, RequestInitEx, UnauthorizedHandler} from "./types.js";
 import {BadStatusCodeError, FetchError} from "./errors.js";
+
+// One for the whole page: the session a 401 says has lapsed is the page's, whichever client asked.
+// It is module state, so a second copy of this package in a bundle would hold a second one.
+let unauthorizedHandler: UnauthorizedHandler | null = null;
+
+// Sets what a 401 is offered to before it is thrown, or, given null, offers it to nothing.
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null) {
+    unauthorizedHandler = handler;
+}
+
+async function send(request: Request, context: Context): Promise<Response> {
+    try {
+        return await fetch(request);
+    } catch (error) {
+        throw new FetchError("fetch", context, {cause: error});
+    }
+}
 
 export async function fetchWithRequest(request: Request, options: RequestInitEx= {}) {
     const context = {request, requestBody: request.body?.toString()} as Context;
 
-    let response: Response | null = null;
-    try {
-        response = await fetch(request);
-    } catch (error) {
-        throw new FetchError("fetch", context, {cause: error});
+    // A caller that reads the status itself is left to, the session's own refresh among them.
+    const handler = unauthorizedHandler;
+    const mayRetry = handler !== null && !options.skipErrorOnStatusCode && !options.skipUnauthorizedRetry;
+    // Cloned before the first send, which consumes the body; a clone taken after has none to send.
+    // A request whose body is gone already cannot be cloned, and goes as it did, to fail in the send.
+    let replay: Request | null = null;
+    if (mayRetry) {
+        try {
+            replay = request.clone();
+        } catch {}
+    }
+
+    let response = await send(request, context);
+
+    // Asked once: a 401 to the request sent again is thrown, however the handler would answer.
+    if (handler && replay && response.status === 401) {
+        let retry = false;
+        try {
+            retry = await handler(request);
+        } catch {}
+
+        // The refused response is only let go of when another takes its place; otherwise its body
+        // is what the error reports.
+        if (retry) {
+            await response.body?.cancel().catch(() => {});
+            response = await send(replay, context);
+        }
     }
 
     context.response = response;
