@@ -6,7 +6,7 @@
  * by its service while signed in and holds in memory alone.
  *
  * A draft is filed under the key's scope -- a fingerprint of the key, which is the account's own --
- * the form it is of, and the record that form edits, and expires a day after it was written. Where it
+ * the form it is of, and the record that form edits, and expires a week after it was written. Where it
  * is filed is not stored as such: a record is known by a hash of it, so that a copied profile does not
  * say which forms and records the account had open. The place is bound into the encryption, so a draft
  * moved to another account's, form's or record's place, or given a later expiry, does not decrypt, and
@@ -73,8 +73,11 @@ export interface Draft {
     writtenAt: number;
 }
 
-/** How long a draft is kept after it was last written. */
-export const draftLifetimeMs = 86_400_000;
+/**
+ * How long a draft is kept after it was last written: a week, so that work left on a Friday is still
+ * there after the weekend.
+ */
+export const draftLifetimeMs = 7 * 86_400_000;
 
 // The drafts, and beside them what the store sweeps by: read on every page load, the drafts
 // themselves hold files, and are only read one at a time, when one is offered.
@@ -285,7 +288,7 @@ export class DraftStore {
     /**
      * The draft kept for a form, or null: none kept, or one that can no longer be read. One expired,
      * under another key, or that does not decrypt as its place is dropped; one that decrypts and then
-     * cannot be read -- a page's own mistake -- is left for the day it is kept, rather than lost.
+     * cannot be read -- a page's own mistake -- is left for the time it is kept, rather than lost.
      */
     async get(id: DraftId): Promise<Draft | null> {
         const recordId = await this.recordId(id);

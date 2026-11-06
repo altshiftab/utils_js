@@ -189,7 +189,7 @@ test("another account's key reads nothing of a draft, even put in its place", as
     assert.equal(records().has(record.id), true, "and the account's own is left");
 });
 
-test("a draft past its day is dropped, when asked for and when the store is opened", async () => {
+test("a draft past its time is dropped, when asked for and when the store is opened", async () => {
     let now = 1_000;
     const keyring = await importDraftKey(jwk(1));
     const store = await DraftStore.open(databaseName, keyring, () => now);
@@ -198,7 +198,7 @@ test("a draft past its day is dropped, when asked for and when the store is open
     await store.put({form: "report", record: ""}, payload);
 
     now += draftLifetimeMs - 1;
-    assert.notEqual(await store.get(orderId), null, "still within its day");
+    assert.notEqual(await store.get(orderId), null, "still within its time");
 
     now += 1;
     assert.equal(await store.get(orderId), null, "asked for after it");
@@ -207,6 +207,10 @@ test("a draft past its day is dropped, when asked for and when the store is open
     await DraftStore.open(databaseName, keyring, () => now);
     assert.equal(records().size, 0, "and the rest when the store is next opened");
     assert.equal(metas().size, 0);
+});
+
+test("a draft is kept for a week", () => {
+    assert.equal(draftLifetimeMs, 7 * 24 * 60 * 60 * 1000);
 });
 
 test("drafts under a key no longer handed out are dropped when the store is opened", async () => {
