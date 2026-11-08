@@ -1,6 +1,6 @@
 {
     "name": "@altshiftab/utils",
-    "version": "0.0.22",
+    "version": "0.0.23",
     "license": "MIT",
     "type": "module",
     "repository": {
@@ -74,11 +74,15 @@
         "./browser/locale": {
             "import": "./dist/browser/locale.js",
             "types": "./dist/browser/locale.d.ts"
+        },
+        "./testing/chromium": {
+            "import": "./dist/testing/chromium.js",
+            "types": "./dist/testing/chromium.d.ts"
         }
     },
     "scripts": {
         "prepare": "npm run build",
-        "build": "tsc",
+        "build": "tsc && tsc -p tsconfig.node.json",
         "test": "tsc -p tsconfig.test.json && node --test \"build/test/**/*.test.js\""
     },
     "devDependencies": {

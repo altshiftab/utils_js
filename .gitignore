@@ -6,6 +6,7 @@
 !/package-lock.json
 !/tsconfig.json
 !/tsconfig.test.json
+!/tsconfig.node.json
 
 !/src
 

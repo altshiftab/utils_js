@@ -1,0 +1,12 @@
+{
+    // What runs in Node rather than in a page, built apart so that the browser modules are checked
+    // without Node's globals.
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "types": ["node"]
+    },
+    "include": [
+        "./src/testing"
+    ],
+    "exclude": []
+}
