@@ -82,7 +82,7 @@
         "test": "tsc -p tsconfig.test.json && node --test \"build/test/**/*.test.js\""
     },
     "devDependencies": {
-        "@types/node": "^26.1.1",
+        "@types/node": "^26.6.6",
         "typescript": "^7.0.2"
     }
 }
