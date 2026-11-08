@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {mkdir, mkdtemp, rm, writeFile} from "node:fs/promises";
+import {mkdir, mkdtemp, readdir, rm, writeFile} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {after, before, test} from "node:test";
@@ -30,6 +30,7 @@ console.error("logged by the page");
 addEventListener("load", () => setTimeout(() => { window.ready = true; }, 200));
 setTimeout(() => { throw new Error("thrown by the page"); });`);
     await writeFile(join(directory, "secret.txt"), "not to be served from the site");
+    await mkdir(join(site, "sub"));
     served = await serveDirectory(site, {headers: {"content-security-policy": policy}});
     page = await Page.open(`${served.origin}/index.html`, {ready: "window.ready === true"});
 }, {timeout: 60_000});
@@ -100,9 +101,13 @@ test("the files served are the directory's, with the headers asked for", async (
         {name: "a file missing", path: "/missing.html", status: 404},
         // An encoded slash, so that the path reaches the server as it is rather than resolved by the client.
         {name: "a path out of the directory", path: "/..%2fsecret.txt", status: 404},
+        {name: "a directory", path: "/sub", status: 404},
+        {name: "the directory itself", path: "/", status: 404},
+        {name: "a path that does not decode", path: "/%", status: 400},
     ];
     for (const testCase of testCases) {
-        const response = await fetch(`${served.origin}${testCase.path}`);
+        // Within a time, so that a request the server never answers fails here rather than hangs.
+        const response = await fetch(`${served.origin}${testCase.path}`, {signal: AbortSignal.timeout(5_000)});
         await response.arrayBuffer();
         assert.equal(response.status, testCase.status, testCase.name);
     }
@@ -129,4 +134,59 @@ test("cookies are set before the page is opened, and what closes with the page i
     }
     assert.equal(closed, true, "closed with the page");
     await assert.rejects(fetch(`${own.origin}/index.html`), "the server is gone");
+});
+
+// profiles are the browsers' profile directories left in the temporary directory.
+async function profiles(): Promise<string[]> {
+    return (await readdir(tmpdir())).filter(name => name.startsWith("altshift-chromium-"));
+}
+
+test("a browser that cannot be had is an error at once, leaving nothing behind", async () => {
+    const testCases = [
+        {name: "CHROME_PATH naming nothing", chromePath: join(directory, "missing"), error: /does not exist/},
+        {name: "CHROME_PATH naming a directory", chromePath: directory, error: /could not be started/},
+    ];
+    const original = process.env.CHROME_PATH;
+    try {
+        for (const testCase of testCases) {
+            process.env.CHROME_PATH = testCase.chromePath;
+            const before = await profiles();
+            let closed = false;
+            const started = Date.now();
+            await assert.rejects(
+                Page.open(`${served.origin}/index.html`, {close: async () => { closed = true; }}),
+                testCase.error,
+                testCase.name,
+            );
+            assert.ok(Date.now() - started < 5_000, `${testCase.name}: at once`);
+            assert.equal(closed, true, `${testCase.name}: what closes with the page is closed`);
+            assert.deepEqual(await profiles(), before, `${testCase.name}: no profile left`);
+        }
+    } finally {
+        if (original === undefined)
+            delete process.env.CHROME_PATH;
+        else
+            process.env.CHROME_PATH = original;
+    }
+});
+
+test("a page that cannot be reached is an error, and leaves nothing waiting", async () => {
+    // A port just given up, so that nothing listens on it.
+    const gone = await serveDirectory(directory);
+    await gone.close();
+    await assert.rejects(Page.open(`${gone.origin}/`, {timeoutMs: 500}), /ERR_CONNECTION_REFUSED/);
+    // Longer than the time it was given, so that a wait it left behind would have gone off by now.
+    await new Promise(done => setTimeout(done, 800));
+});
+
+test("a call waiting on the page is answered once the page is gone", async () => {
+    const gone = await Page.open(`${served.origin}/index.html`, {ready: "window.ready === true"});
+    const testCases = [
+        {name: "evaluate", call: gone.evaluate("new Promise(() => {})")},
+        {name: "waitFor, long before its deadline", call: gone.waitFor("new Promise(() => {})", 60_000)},
+    ];
+    const answered = testCases.map(testCase => assert.rejects(testCase.call, /the page was closed/, testCase.name));
+    await gone.close();
+    await Promise.all(answered);
+    await assert.rejects(gone.evaluate("1"), /the page was closed/, "a call after closing");
 });

@@ -3,11 +3,12 @@
 // loading at all. It is hand-rolled rather than taken as a dependency: Node supplies the WebSocket,
 // so the Chrome DevTools Protocol needs no client library.
 //
-// It runs in Node, never in a page: it spawns the browser and serves files.
+// It runs in Node, never in a page: it spawns the browser and serves files. Whatever goes wrong --
+// no browser, a browser that dies, a page that never answers -- is an error within the time asked
+// for, never a test that waits forever.
 
 import {spawn, type ChildProcess} from "node:child_process";
-import {once} from "node:events";
-import {createReadStream, existsSync} from "node:fs";
+import {createReadStream, existsSync, statSync} from "node:fs";
 import {mkdtemp, rm} from "node:fs/promises";
 import {createServer, type Server} from "node:http";
 import {tmpdir} from "node:os";
@@ -53,6 +54,15 @@ export function findBrowser(): string {
     );
 }
 
+// The promise's value, or an error naming what was waited for once the time is up.
+function within<T>(promise: Promise<T>, timeoutMs: number, what: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`waited ${timeoutMs} ms for ${what}`)), timeoutMs);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 export interface Served {
     origin: string;
     close: () => Promise<void>;
@@ -64,23 +74,31 @@ export interface ServeOptions {
 }
 
 // Serves the files under the directory on a port of its own on the loopback interface, so a test page
-// reaches what it imports by path. Nothing outside the directory is served.
+// reaches what it imports by path. Nothing outside the directory is served, and nothing but files.
 export function serveDirectory(directory: string, options: ServeOptions = {}): Promise<Served> {
     const root = resolve(directory);
     const server: Server = createServer((request, response) => {
-        const path = normalize(decodeURIComponent(new URL(request.url ?? "/", "http://localhost").pathname));
+        let path: string;
+        try {
+            path = normalize(decodeURIComponent(new URL(request.url ?? "/", "http://localhost").pathname));
+        } catch {
+            response.writeHead(400).end("bad request");
+            return;
+        }
         const file = join(root, path);
 
-        if (!file.startsWith(root + "/") || !existsSync(file)) {
+        if (!file.startsWith(root + "/") || !statSync(file, {throwIfNoEntry: false})?.isFile()) {
             response.writeHead(404).end("not found");
             return;
         }
 
+        const stream = createReadStream(file);
+        stream.once("error", () => response.destroy());
         response.writeHead(200, {
             "content-type": CONTENT_TYPES[extname(file)] ?? "application/octet-stream",
             ...options.headers,
         });
-        createReadStream(file).pipe(response);
+        stream.pipe(response);
     });
 
     return new Promise((resolvePromise, reject) => {
@@ -116,7 +134,8 @@ export interface OpenOptions {
     // ready is an expression the page is waited on until it is true, once it has loaded.
     ready?: string;
     timeoutMs?: number;
-    // close is what else ends with the page, such as the server it was opened from.
+    // close is what else ends with the page, such as the server it was opened from. It is called
+    // also when the page cannot be opened.
     close?: () => Promise<void>;
 }
 
@@ -143,6 +162,8 @@ export class Page {
 
     #sessionId = "";
     #nextId = 1;
+    // gone is why the browser can no longer be asked anything, once it cannot.
+    #gone: Error | undefined;
 
     private constructor(socket: WebSocket, browser: ChildProcess, profile: string, closeAlso: (() => Promise<void>) | undefined) {
         this.#socket = socket;
@@ -152,31 +173,40 @@ export class Page {
     }
 
     static async open(url: string, options: OpenOptions = {}): Promise<Page> {
-        const profile = await mkdtemp(join(tmpdir(), "altshift-chromium-"));
-
-        // Chromium refuses its own sandbox as root, which is the one case CI tends to hit.
-        const sandbox = process.getuid?.() === 0 ? ["--no-sandbox"] : [];
-        const browser = spawn(findBrowser(), [
-            "--headless",
-            "--disable-gpu",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--disable-extensions",
-            `--user-data-dir=${profile}`,
-            "--remote-debugging-port=0",
-            ...sandbox,
-            "about:blank",
-        ], {stdio: ["ignore", "ignore", "pipe"]});
-
+        let profile: string | undefined;
+        let browser: ChildProcess | undefined;
         let page: Page | undefined;
         try {
+            const executable = findBrowser();
+            profile = await mkdtemp(join(tmpdir(), "altshift-chromium-"));
+
+            // Chromium refuses its own sandbox as root, which is the one case CI tends to hit.
+            const sandbox = process.getuid?.() === 0 ? ["--no-sandbox"] : [];
+            browser = spawn(executable, [
+                "--headless",
+                "--disable-gpu",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-extensions",
+                `--user-data-dir=${profile}`,
+                "--remote-debugging-port=0",
+                ...sandbox,
+                "about:blank",
+            ], {
+                stdio: ["ignore", "ignore", "pipe"],
+                // Chromium leaves scratch directories in the temporary directory; given the profile as
+                // its own, they go with it.
+                env: {...process.env, TMPDIR: profile},
+            });
+
             const endpoint = await readDevToolsEndpoint(browser);
-            const socket = new WebSocket(endpoint);
-            await once(socket, "open");
+            const socket = await connect(endpoint);
 
             page = new Page(socket, browser, profile, options.close);
             const opened = page;
             socket.addEventListener("message", event => opened.#receive(String(event.data)));
+            socket.addEventListener("close", () => opened.#fail(new Error("the connection to the browser closed")));
+            browser.once("exit", code => opened.#fail(new Error(`the browser exited with ${code}`)));
 
             // Target.* is addressed at the browser, so these two go out before a session exists; every
             // call after the attach carries the session id and lands in the page.
@@ -195,7 +225,11 @@ export class Page {
                 if (entry.level === "error")
                     opened.problems.push(`${entry.source}: ${entry.text}`);
             });
+            // A page's renderer that crashes answers nothing it was asked. Chromium takes half a minute or so
+            // to say so, which is why no test makes it happen.
+            page.#on("Inspector.targetCrashed", () => opened.#fail(new Error("the page crashed")));
 
+            await page.#send("Inspector.enable");
             await page.#send("Page.enable");
             await page.#send("Runtime.enable");
             await page.#send("Log.enable");
@@ -206,12 +240,14 @@ export class Page {
             await page.goto(url, options);
             return page;
         } catch (error) {
+            // Cleaning up after a failure must not hide it.
             if (page !== undefined)
-                await page.close();
+                await page.close().catch(() => undefined);
             else {
-                browser.kill();
-                await rm(profile, {recursive: true, force: true, maxRetries: 10, retryDelay: 100});
-                await options.close?.();
+                browser?.kill();
+                if (profile !== undefined)
+                    await rm(profile, {recursive: true, force: true, maxRetries: 10, retryDelay: 100}).catch(() => undefined);
+                await options.close?.().catch(() => undefined);
             }
             throw error;
         }
@@ -220,11 +256,16 @@ export class Page {
     // Navigates to the address, and waits until the page has loaded and, if asked, is ready.
     async goto(url: string, options: {ready?: string, timeoutMs?: number} = {}): Promise<void> {
         const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-        const loaded = this.#next("Page.loadEventFired", timeoutMs);
-        const {errorText} = await this.#send("Page.navigate", {url});
-        if (errorText)
-            throw new Error(`navigating to ${url}: ${errorText}`);
-        await loaded;
+        // Listened for before navigating, so that a load quicker than the reply is not missed.
+        const loaded = this.#next("Page.loadEventFired");
+        try {
+            const {errorText} = await within(this.#send("Page.navigate", {url}), timeoutMs, `navigating to ${url}`);
+            if (errorText)
+                throw new Error(`navigating to ${url}: ${errorText}`);
+            await within(loaded.event, timeoutMs, `${url} to load`);
+        } finally {
+            loaded.cancel();
+        }
         if (options.ready !== undefined)
             await this.waitFor(options.ready, timeoutMs);
     }
@@ -235,9 +276,11 @@ export class Page {
         let last: unknown;
         for (;;) {
             try {
-                if (await this.evaluate(expression) === true)
+                if (await within(this.evaluate(expression), Math.max(deadline - Date.now(), 1), expression) === true)
                     return;
             } catch (error) {
+                if (this.#gone !== undefined)
+                    throw error;
                 // The document may not be the one waited for yet; keep polling until the deadline.
                 last = error;
             }
@@ -281,15 +324,24 @@ export class Page {
     }
 
     async close(): Promise<void> {
+        this.#fail(new Error("the page was closed"));
         this.#socket.close();
         if (this.#browser.exitCode === null && this.#browser.signalCode === null) {
-            const exited = once(this.#browser, "exit");
+            const exited = new Promise(done => this.#browser.once("exit", done));
             this.#browser.kill();
             await exited;
         }
         // The browser's helper processes can still be writing to the profile as it exits.
         await rm(this.#profile, {recursive: true, force: true, maxRetries: 10, retryDelay: 100});
         await this.#closeAlso?.();
+    }
+
+    // fail answers every call waiting on the browser, and every one after, with the error.
+    #fail(error: Error) {
+        this.#gone ??= error;
+        for (const pending of this.#pending.values())
+            pending.reject(this.#gone);
+        this.#pending.clear();
     }
 
     #receive(data: string) {
@@ -321,23 +373,23 @@ export class Page {
         listeners.add(listener);
     }
 
-    // The next event of the method, or an error once the time is up.
-    #next(method: string, timeoutMs: number): Promise<any> {
-        return new Promise((resolvePromise, reject) => {
-            const listener = (params: any) => {
-                clearTimeout(timer);
-                this.#listeners.get(method)?.delete(listener);
+    // The next event of the method, and a way to stop listening for it.
+    #next(method: string): {event: Promise<any>, cancel: () => void} {
+        let listener: ((params: any) => void) | undefined;
+        const event = new Promise<any>(resolvePromise => {
+            listener = (params: any) => {
+                this.#listeners.get(method)?.delete(listener!);
                 resolvePromise(params);
             };
-            const timer = setTimeout(() => {
-                this.#listeners.get(method)?.delete(listener);
-                reject(new Error(`waited ${timeoutMs} ms for ${method}`));
-            }, timeoutMs);
             this.#on(method, listener);
         });
+        return {event, cancel: () => this.#listeners.get(method)?.delete(listener!)};
     }
 
     #send(method: string, params: Record<string, unknown> = {}): Promise<any> {
+        if (this.#gone !== undefined)
+            return Promise.reject(this.#gone);
+
         const id = this.#nextId++;
         const payload: Record<string, unknown> = {id, method, params};
         if (this.#sessionId)
@@ -364,9 +416,25 @@ function readDevToolsEndpoint(browser: ChildProcess): Promise<string> {
             }
         });
 
+        // A browser that cannot be started at all -- CHROME_PATH naming a directory, say -- never exits.
+        browser.once("error", error => {
+            clearTimeout(timer);
+            reject(new Error(`the browser could not be started: ${error.message}`));
+        });
+
         browser.once("exit", code => {
             clearTimeout(timer);
             reject(new Error(`the browser exited with code ${code} before listening:\n${output}`));
         });
+    });
+}
+
+// A connection to the browser's endpoint, or an error once it cannot be had.
+function connect(endpoint: string): Promise<WebSocket> {
+    return new Promise((resolvePromise, reject) => {
+        const socket = new WebSocket(endpoint);
+        socket.addEventListener("open", () => resolvePromise(socket), {once: true});
+        socket.addEventListener("error", () => reject(new Error(`could not connect to the browser at ${endpoint}`)), {once: true});
+        socket.addEventListener("close", () => reject(new Error(`could not connect to the browser at ${endpoint}`)), {once: true});
     });
 }
