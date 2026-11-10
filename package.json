@@ -1,6 +1,6 @@
 {
     "name": "@altshiftab/utils",
-    "version": "0.0.23",
+    "version": "0.0.24",
     "license": "MIT",
     "type": "module",
     "repository": {
@@ -78,6 +78,10 @@
         "./testing/chromium": {
             "import": "./dist/testing/chromium.js",
             "types": "./dist/testing/chromium.d.ts"
+        },
+        "./testing/templates": {
+            "import": "./dist/testing/templates.js",
+            "types": "./dist/testing/templates.d.ts"
         }
     },
     "scripts": {
@@ -85,8 +89,17 @@
         "build": "tsc && tsc -p tsconfig.node.json",
         "test": "tsc -p tsconfig.test.json && node --test \"build/test/**/*.test.js\""
     },
+    "peerDependencies": {
+        "lit": "^3.3.3"
+    },
+    "peerDependenciesMeta": {
+        "lit": {
+            "optional": true
+        }
+    },
     "devDependencies": {
         "@types/node": "^26.6.6",
+        "lit": "^3.3.3",
         "typescript": "^7.0.2"
     }
 }
