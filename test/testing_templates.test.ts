@@ -4,6 +4,7 @@ import {test} from "node:test";
 import {html, LitElement, nothing} from "lit";
 import {keyed} from "lit/directives/keyed.js";
 import {live} from "lit/directives/live.js";
+import {createRef, ref} from "lit/directives/ref.js";
 import {repeat} from "lit/directives/repeat.js";
 import {styleMap} from "lit/directives/style-map.js";
 
@@ -41,6 +42,10 @@ test("the markup a template renders", () => {
         {name: "keyed", value: html`<div>${keyed("k", html`<p>${"inside"}</p>`)}</div>`, want: `<div><p>inside</p></div>`},
         {name: "live", value: html`<input .value=${live("typed")}>`, want: `<input .value="typed">`},
         {name: "a property's object and a listener", value: html`<x-a .items=${[1]} @click=${() => {}}></x-a>`, want: `<x-a .items="" @click=""></x-a>`},
+        {name: "a comment, with a quote and a tag in it", value: html`<!-- the user's <b> --><p>${"x"}</p>`, want: `<!-- the user's <b> --><p>x</p>`},
+        {name: "a value bound in a comment", value: html`<!-- ${"gone"} --><p></p>`, want: `<!--  --><p></p>`},
+        {name: "the shortest comment", value: html`<!----><p title="a'b"></p>`, want: `<!----><p title="a'b"></p>`},
+        {name: "a directive bound to the element", value: html`<dialog ${ref(createRef())} @close=${() => {}}></dialog>`, want: `<dialog  @close=""></dialog>`},
     ];
     for (const testCase of testCases) {
         assert.equal(renderedTemplate(testCase.value).html, testCase.want, testCase.name);
@@ -56,13 +61,19 @@ test("each binding with the opening tag of its element", () => {
         {name: "@click", value: listener, tag: `<button @click="">`},
     ]);
     assert.equal(subject.bound(".value", `name="a"`), "x");
+
+    const dialogRef = createRef();
+    const withRef = renderedTemplate(html`<dialog ${ref(dialogRef)}></dialog>`);
+    assert.deepEqual(withRef.bindings.map(binding => binding.name), [""], "the element's own binding has no name");
+    assert.equal(withRef.bindings[0].tag, "<dialog >");
 });
 
 test("what the reader refuses rather than passes over", () => {
     const testCases = [
         {name: "a directive it does not know, as a child", value: html`<p>${styleMap({color: "red"})}</p>`, want: /does not know/},
         {name: "a directive it does not know, in an attribute", value: html`<p style=${styleMap({color: "red"})}></p>`, want: /does not know/},
-        {name: "a tag left open", value: html`<p title="x`, want: /left open/},
+        {name: "a tag left open", value: html`<p title="x`, want: /a tag left open/},
+        {name: "a comment left open", value: html`<!-- <p>`, want: /a comment left open/},
     ];
     for (const testCase of testCases) {
         assert.throws(() => renderedTemplate(testCase.value), testCase.want, testCase.name);

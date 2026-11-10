@@ -56,8 +56,13 @@ function attributeValue(value: unknown): string {
     return String(value);
 }
 
+// Where the markup written so far ends: in text, in a comment, in a tag, or in a value of one quoted with
+// the character.
+type State = "text" | "comment" | "tag" | "\"" | "'";
+
 export interface Binding {
-    // name is the attribute bound, with its prefix: "@click", ".value", "?readonly", "aria-label".
+    // name is the attribute bound, with its prefix: "@click", ".value", "?readonly", "aria-label"; or
+    // nothing, for a directive bound to the element itself, as ref is.
     name: string;
     value: unknown;
     // tag is the opening tag of the element the binding is on, as rendered.
@@ -76,10 +81,10 @@ export class Rendered {
         const bindings: Binding[] = [];
         let html = "";
 
-        // Where the markup written so far ends: in text, in a tag, or in a value of one quoted with the
-        // character. Only the template's own strings move it, as the values written in are escaped.
-        let state: "text" | "tag" | "\"" | "'" = "text";
+        // Only the template's own strings move the state, as the values written in are escaped.
+        let state: State = "text";
         let tagStart = 0;
+        let commentStart = 0;
         // The bindings of the tag being written, which get their tag once it is closed.
         let open: {name: string, value: unknown}[] = [];
 
@@ -89,9 +94,17 @@ export class Rendered {
             for (let i = 0; i < part.length; i++) {
                 const character = part[i];
                 if (state === "text") {
-                    if (character === "<") {
+                    if (html.startsWith("<!--", base + i)) {
+                        state = "comment";
+                        commentStart = base + i;
+                    } else if (character === "<") {
                         state = "tag";
                         tagStart = base + i;
+                    }
+                } else if (state === "comment") {
+                    // A comment ends at the first -->, one that does not overlap its <!--.
+                    if (base + i - commentStart >= 6 && html.slice(base + i - 2, base + i + 1) === "-->") {
+                        state = "text";
                     }
                 } else if (state === "tag") {
                     if (character === "\"" || character === "'") {
@@ -145,8 +158,17 @@ export class Rendered {
                     child(value);
                     return;
                 }
-                // In a tag: an attribute's value, unquoted where the template leaves it so, or a part of
-                // a quoted one.
+                if (state === "comment") {
+                    // Lit renders nothing of a value bound in a comment.
+                    return;
+                }
+                // In a tag: the element itself, as ref binds it, which writes nothing.
+                if (state === "tag" && /\s$/.test(part)) {
+                    open.push({name: "", value});
+                    return;
+                }
+                // Or an attribute's value, unquoted where the template leaves it so, or a part of a quoted
+                // one.
                 const attribute = /([.?@]?[^\s"'<>/=]+)=(?:"[^"]*|'[^']*|)$/.exec(html);
                 if (!attribute) {
                     throw new Error(`a binding the template reader does not know, after: ${part}`);
@@ -158,7 +180,12 @@ export class Rendered {
         };
 
         child(value);
-        if (state !== "text") {
+        // As the closures above left it, which the compiler cannot see.
+        const end = state as State;
+        if (end === "comment") {
+            throw new Error(`a comment left open: ${html.slice(commentStart)}`);
+        }
+        if (end !== "text") {
             throw new Error(`a tag left open: ${html.slice(tagStart)}`);
         }
         this.html = html;
