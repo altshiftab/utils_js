@@ -38,19 +38,20 @@ function escapeAttribute(text: string): string {
     return escapeText(text).replaceAll("\"", "&quot;").replaceAll("'", "&#39;");
 }
 
-// attributeValue is what an attribute binding writes: nothing for a listener, a property's object, or
-// nothing itself, which removes the attribute.
-function attributeValue(value: unknown): string {
+// attributeValue is what a binding to the named attribute writes: nothing for a listener, a property's
+// object, or nothing itself, which removes the attribute; and an attribute's value as the attribute takes
+// it, as a string.
+function attributeValue(name: string, value: unknown): string {
     if (isDirective(value)) {
         if (value._$litDirective$ !== liveDirective) {
             throw new Error("a directive the template reader does not know");
         }
-        return attributeValue(value.values[0]);
+        return attributeValue(name, value.values[0]);
     }
     if (value === nothing || value === noChange || value === null || value === undefined) {
         return "";
     }
-    if (typeof value === "object" || typeof value === "function") {
+    if ((name.startsWith(".") || name.startsWith("@")) && (typeof value === "object" || typeof value === "function")) {
         return "";
     }
     return String(value);
@@ -162,18 +163,18 @@ export class Rendered {
                     // Lit renders nothing of a value bound in a comment.
                     return;
                 }
-                // In a tag: the element itself, as ref binds it, which writes nothing.
-                if (state === "tag" && /\s$/.test(part)) {
-                    open.push({name: "", value});
-                    return;
-                }
-                // Or an attribute's value, unquoted where the template leaves it so, or a part of a quoted
-                // one.
-                const attribute = /([.?@]?[^\s"'<>/=]+)=(?:"[^"]*|'[^']*|)$/.exec(html);
+                // In a tag: an attribute's value, unquoted where the template leaves it so, or a part of a
+                // quoted one; read from the tag alone, so that nothing before it can pass for an attribute.
+                const attribute = /([.?@]?[^\s"'<>/=]+)\s*=\s*(?:"[^"]*|'[^']*|)$/.exec(html.slice(tagStart));
                 if (!attribute) {
+                    // Or the element itself, as ref binds it, which writes nothing.
+                    if (state === "tag" && /\s$/.test(part)) {
+                        open.push({name: "", value});
+                        return;
+                    }
                     throw new Error(`a binding the template reader does not know, after: ${part}`);
                 }
-                const text = escapeAttribute(attributeValue(value));
+                const text = escapeAttribute(attributeValue(attribute[1], value));
                 html += state === "tag" ? `"${text}"` : text;
                 open.push({name: attribute[1], value});
             });
@@ -201,7 +202,10 @@ export class Rendered {
         }
         return this.tags
             .filter(({at, tag}) => at >= start && /^<button\b/.test(tag))
-            .flatMap(({tag}) => /\saria-label="([^"]*)"/.exec(tag)?.[1] ?? []);
+            .flatMap(({tag}) => {
+                const label = /\saria-label\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/.exec(tag);
+                return label ? [label[1] ?? label[2] ?? label[3]] : [];
+            });
     }
 
     // bound is the value bound to the attribute, with its prefix, on the one element whose opening tag has
@@ -215,9 +219,14 @@ export class Rendered {
     }
 
     // fire calls the listener bound for the event on the one element whose opening tag has the text, as
-    // Lit calls it: with the component, if one was read, as this.
+    // Lit calls it: a function with the component, if one was read, as this, and an object's handleEvent.
     fire(type: string, tagHas: string, event: Event = new Event(type, {cancelable: true})): Event {
-        (this.bound(`@${type}`, tagHas) as (event: Event) => void).call(this.host, event);
+        const listener = this.bound(`@${type}`, tagHas);
+        if (typeof listener === "function") {
+            listener.call(this.host, event);
+        } else {
+            (listener as EventListenerObject).handleEvent(event);
+        }
         return event;
     }
 }

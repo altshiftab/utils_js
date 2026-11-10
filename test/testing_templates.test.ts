@@ -46,6 +46,8 @@ test("the markup a template renders", () => {
         {name: "a value bound in a comment", value: html`<!-- ${"gone"} --><p></p>`, want: `<!--  --><p></p>`},
         {name: "the shortest comment", value: html`<!----><p title="a'b"></p>`, want: `<!----><p title="a'b"></p>`},
         {name: "a directive bound to the element", value: html`<dialog ${ref(createRef())} @close=${() => {}}></dialog>`, want: `<dialog  @close=""></dialog>`},
+        {name: "an object on an attribute, as its string", value: html`<a href=${new URL("https://example.com/a")}>x</a>`, want: `<a href="https://example.com/a">x</a>`},
+        {name: "space around the equals sign", value: html`<input .value= ${"typed"} title = ${"t"}>`, want: `<input .value= "typed" title = "t">`},
     ];
     for (const testCase of testCases) {
         assert.equal(renderedTemplate(testCase.value).html, testCase.want, testCase.name);
@@ -61,6 +63,16 @@ test("each binding with the opening tag of its element", () => {
         {name: "@click", value: listener, tag: `<button @click="">`},
     ]);
     assert.equal(subject.bound(".value", `name="a"`), "x");
+
+    const testCases = [
+        {name: "space around the equals sign", value: html`<input .value= ${"typed"}>`, want: [".value"]},
+        {name: "text before the tag that looks like an attribute", value: html`<p>example="unfinished</p><button @click=${() => {}}></button>`, want: ["@click"]},
+        {name: "a comment before the tag that looks like one", value: html`<!-- example='unfinished --><button @click=${() => {}}></button>`, want: ["@click"]},
+        {name: "an equals sign in a quoted value", value: html`<a href="/orders?id=${"o1"}&x=${"y"}"></a>`, want: ["href", "href"]},
+    ];
+    for (const testCase of testCases) {
+        assert.deepEqual(renderedTemplate(testCase.value).bindings.map(binding => binding.name), testCase.want, testCase.name);
+    }
 
     const dialogRef = createRef();
     const withRef = renderedTemplate(html`<dialog ${ref(dialogRef)}></dialog>`);
@@ -100,15 +112,26 @@ test("a listener is called as Lit calls it, with the component as this", () => {
     assert.equal(event.type, "click");
 });
 
+test("a listener object is called as Lit calls it, through its handleEvent", () => {
+    const events: Event[] = [];
+    const listener = {handleEvent(event: Event): void {
+        assert.equal(this, listener);
+        events.push(event);
+    }};
+    const event = renderedTemplate(html`<button @click=${listener}>Go</button>`).fire("click", "<button");
+    assert.deepEqual(events, [event]);
+});
+
 test("the labels of the buttons after a text, or of all of them", () => {
     const subject = rendered(host(() => html`
         <button aria-label="Pin"></button>
         <h2>Actions</h2>
         <button aria-label="Delete"></button><a aria-label="Link"></a><button>No label</button>
+        <button aria-label='Single'></button><button aria-label=Bare></button><button aria-label='${"Bound"}'></button>
     `));
     const testCases = [
-        {name: "all", after: "", want: ["Pin", "Delete"]},
-        {name: "after a heading", after: "<h2>Actions", want: ["Delete"]},
+        {name: "all", after: "", want: ["Pin", "Delete", "Single", "Bare", "Bound"]},
+        {name: "after a heading", after: "<h2>Actions", want: ["Delete", "Single", "Bare", "Bound"]},
     ];
     for (const testCase of testCases) {
         assert.deepEqual(subject.labels(testCase.after), testCase.want, testCase.name);
