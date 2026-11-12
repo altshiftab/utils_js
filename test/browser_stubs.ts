@@ -65,6 +65,8 @@ export interface Stubs {
     visibilityState: DocumentVisibilityState;
     now: number;
     transitionCount: number;
+    // The key of the Navigation API's current history entry, which a test moves as it navigates.
+    navigationEntryKey: string;
     dispatch(type: string, event?: unknown): Promise<void>;
     dispatchDocument(type: string, event?: unknown): Promise<void>;
     dispatchNavigate(event: unknown): Promise<void>;
@@ -121,6 +123,7 @@ export function installStubs(options: StubOptions = {}): Stubs {
         visibilityState: "visible",
         now: 1_000_000,
         transitionCount: 0,
+        navigationEntryKey: "entry-0",
         dispatch: (type, event) => fire(listeners, type, event),
         dispatchDocument: (type, event) => fire(documentListeners, type, event),
         dispatchNavigate: event => fire(navigateListeners, "navigate", event),
@@ -151,7 +154,12 @@ export function installStubs(options: StubOptions = {}): Stubs {
 
     const windowStub: Record<string, unknown> = {location: stubs.location};
     if (navigation)
-        windowStub.navigation = {addEventListener: add(navigateListeners)};
+        windowStub.navigation = {
+            addEventListener: add(navigateListeners),
+            get currentEntry() {
+                return {key: stubs.navigationEntryKey};
+            },
+        };
 
     Object.assign(globals(), {
         addEventListener: add(listeners),

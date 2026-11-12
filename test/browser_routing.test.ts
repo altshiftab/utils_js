@@ -227,3 +227,71 @@ test("a successful import clears an earlier reload marker", async () => {
     assert.equal(harness.rendered.length, 1);
     assert.equal(stubs!.sessionStorageData.has("spa-page-import-reload:/reports"), false);
 });
+
+// An app whose content scrolls in an element of its own, which the router is to put where the
+// browser would put the viewport.
+function setUpWithScrollContainer() {
+    stubs = installStubs({viewTransitions: true, navigation: true});
+
+    const scroller = {scrollTop: 0, scrollLeft: 0};
+    setUpSpaRouting(
+        paths,
+        async () => ({default: class Page {constructor() {}}}),
+        () => {},
+        {scrollContainer: () => scroller},
+    );
+
+    return scroller;
+}
+
+async function navigateTo(url: string, overrides: Record<string, unknown> = {}) {
+    const event = navigateEvent(url, overrides);
+    await stubs!.dispatchNavigate(event);
+    await Promise.all(event.intercepted);
+}
+
+test("an item opened from far down a list opens at the top, and back is where the list was left", async () => {
+    const scroller = setUpWithScrollContainer();
+
+    // Far down the list, an item is opened.
+    stubs!.navigationEntryKey = "list";
+    scroller.scrollTop = 1200;
+    scroller.scrollLeft = 30;
+    await navigateTo("https://example.test/reports/monthly-summary");
+    assert.deepEqual({...scroller}, {scrollTop: 0, scrollLeft: 0}, "the item opens at the top");
+
+    // The item is read some way down, and the reader goes back.
+    stubs!.navigationEntryKey = "item";
+    scroller.scrollTop = 400;
+    await navigateTo("https://example.test/reports", {
+        navigationType: "traverse",
+        destination: {url: "https://example.test/reports", key: "list"},
+    });
+    assert.deepEqual({...scroller}, {scrollTop: 1200, scrollLeft: 30}, "back at the list, where it was left");
+
+    // And forward again, to where the item was left.
+    stubs!.navigationEntryKey = "list";
+    await navigateTo("https://example.test/reports/monthly-summary", {
+        navigationType: "traverse",
+        destination: {url: "https://example.test/reports/monthly-summary", key: "item"},
+    });
+    assert.deepEqual({...scroller}, {scrollTop: 400, scrollLeft: 0}, "forward at the item, where it was left");
+});
+
+test("a step through history to an entry with no position known goes to the top", async () => {
+    const testCases = [
+        {name: "an entry left before the router started", destination: {url: "https://example.test/reports", key: "older"}},
+        {name: "an entry with no key", destination: {url: "https://example.test/reports"}},
+    ];
+
+    for (const testCase of testCases) {
+        const scroller = setUpWithScrollContainer();
+        scroller.scrollTop = 900;
+
+        await navigateTo(testCase.destination.url, {navigationType: "traverse", destination: testCase.destination});
+        assert.deepEqual({...scroller}, {scrollTop: 0, scrollLeft: 0}, testCase.name);
+
+        stubs!.restore();
+        stubs = null;
+    }
+});
