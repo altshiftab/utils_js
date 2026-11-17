@@ -21,11 +21,26 @@ const defaultRedirectGraceMs = 30_000;
 
 export type RefreshOutcome = "ok" | "unauthorized" | "failed";
 
+// What renews the session, besides a refused request, the page being shown again, the network coming
+// back and the page being brought back from the cache, which renew it whichever this is.
+//
+// - "interval" renews on a clock, every intervalMs, whether anyone is at the page or not. A page left
+//   open keeps its session fresh, so even a request nothing can send again -- an image, a form
+//   posted -- goes with a valid token. The login service's database is woken every time the token
+//   is renewed, for as long as the page is open.
+// - "use" renews when the page is used -- a key pressed, a pointer put down, its window focused --
+//   once intervalMs has passed since the last renewal. A page left alone asks nothing, so the
+//   database can sleep; the price is that after a while away, the first requests go with a lapsed
+//   token, and only those sent through fetchEx are renewed and sent again.
+export type RenewOn = "interval" | "use";
+
 export interface RefreshSessionOptions {
     // Run when the session is found to have ended, before the browser is sent to sign in; the
     // redirect waits for what it returns to settle. Where a page keeps what it has not saved, and
     // says so before it is left.
     onSessionEnded?: () => Promise<void> | void;
+    // What renews the session; "interval" unless said otherwise. See RenewOn.
+    renewOn?: RenewOn;
     retryDelayMs?: number;
     maxRetryDelayMs?: number;
     timeoutMs?: number;
@@ -41,6 +56,7 @@ export async function refreshSession(
 ) {
     const {
         onSessionEnded,
+        renewOn = "interval",
         retryDelayMs = defaultRetryDelayMs,
         maxRetryDelayMs = defaultMaxRetryDelayMs,
         timeoutMs = defaultTimeoutMs,
@@ -258,7 +274,19 @@ export async function refreshSession(
 
     // Scheduled before the first refresh is awaited: a failure at startup, an offline page load
     // above all, must not leave the page without polling for the rest of its life.
-    setInterval(pollRefresh, intervalMs);
+    if (renewOn === "use") {
+        // Captured, so that a page stopping an event's propagation does not keep it from counting as
+        // use; passive, so that listening holds up no scroll.
+        const onUse = () => {
+            if (document.visibilityState === "visible" && Date.now() - lastRefresh >= intervalMs)
+                pollRefresh();
+        };
+        for (const type of ["pointerdown", "keydown"])
+            document.addEventListener(type, onUse, {capture: true, passive: true});
+        addEventListener("focus", onUse);
+    } else {
+        setInterval(pollRefresh, intervalMs);
+    }
 
     await refresh();
 }

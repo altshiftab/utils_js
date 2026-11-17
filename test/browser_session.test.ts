@@ -624,3 +624,83 @@ test("coming back online starts the delays over", async () => {
 
     assert.equal(stubs.timeouts.at(-1)!.ms, 1_000);
 });
+
+test("renewing on use schedules no clock", async () => {
+    stubs = installStubs({respond: () => new Response(null, {status: 200})});
+
+    await refreshSession(refreshUrl, {}, redirectUrl, 60_000, {renewOn: "use"});
+
+    assert.equal(stubs.fetchCalls.length, 1, "the session is renewed as the page starts");
+    assert.deepEqual(stubs.intervals, [], "and nothing renews it on a clock after");
+});
+
+test("on use, a key, a pointer or the window's focus renews, once the interval has passed", async () => {
+    const testCases = [
+        {name: "a key pressed", use: (installed: Stubs) => installed.dispatchDocument("keydown")},
+        {name: "a pointer put down", use: (installed: Stubs) => installed.dispatchDocument("pointerdown")},
+        {name: "the window focused", use: (installed: Stubs) => installed.dispatch("focus")},
+    ];
+
+    for (const testCase of testCases) {
+        const installed = installStubs({respond: () => new Response(null, {status: 200})});
+        stubs = installed;
+        await refreshSession(refreshUrl, {}, redirectUrl, 60_000, {renewOn: "use"});
+
+        installed.now += 59_000;
+        await testCase.use(installed);
+        assert.equal(installed.fetchCalls.length, 1, `${testCase.name}, too soon after the last renewal`);
+
+        installed.now += 1_000;
+        await testCase.use(installed);
+        assert.equal(installed.fetchCalls.length, 2, `${testCase.name}, once the interval has passed`);
+
+        installed.restore();
+        stubs = null;
+        setUnauthorizedHandler(null);
+    }
+});
+
+test("on use, a hidden page renews nothing", async () => {
+    stubs = installStubs({respond: () => new Response(null, {status: 200})});
+    await refreshSession(refreshUrl, {}, redirectUrl, 60_000, {renewOn: "use"});
+
+    stubs.visibilityState = "hidden";
+    stubs.now += 600_000;
+    await stubs.dispatch("focus");
+    await stubs.dispatchDocument("keydown");
+
+    assert.equal(stubs.fetchCalls.length, 1);
+});
+
+test("by default the clock renews, and use does not", async () => {
+    stubs = installStubs({respond: () => new Response(null, {status: 200})});
+    await refreshSession(refreshUrl, {}, redirectUrl, 60_000);
+
+    stubs.now += 600_000;
+    await stubs.dispatchDocument("pointerdown");
+    await stubs.dispatchDocument("keydown");
+    await stubs.dispatch("focus");
+
+    assert.equal(stubs.fetchCalls.length, 1, "use renews nothing");
+    assert.deepEqual(stubs.intervals.map(interval => interval.ms), [60_000], "the clock does");
+});
+
+test("on use, a request refused for an expired token is still sent again once the session is renewed", async () => {
+    const apiStatuses = [401, 200];
+    stubs = installStubs({
+        respond: call => isRefresh(call.input)
+            ? new Response(null, {status: 200})
+            : new Response("answered", {status: apiStatuses.shift() ?? 500}),
+    });
+
+    await refreshSession(refreshUrl, {}, redirectUrl, 60_000, {renewOn: "use"});
+
+    const {response, responseText} = await fetchEx("https://example.test/api/accounts");
+
+    assert.equal(response.status, 200);
+    assert.equal(responseText, "answered");
+    assert.deepEqual(
+        stubs.fetchCalls.map(call => isRefresh(call.input) ? "refresh" : "api"),
+        ["refresh", "api", "refresh", "api"],
+    );
+});
